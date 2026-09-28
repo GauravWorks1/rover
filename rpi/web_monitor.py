@@ -444,12 +444,12 @@ class WebMonitor:
                 det_raw, det_age = self.rover.detector.get_detection()
                 if det_raw and det_age < 2.0:
                     detection = {
-                        'cx': det_raw['cx'],
-                        'cy': det_raw['cy'],
-                        'w': det_raw['w'],
-                        'h': det_raw['h'],
-                        'area_ratio': round(det_raw['area_ratio'], 4),
-                        'confidence': round(det_raw['confidence'], 3)
+                        'cx': int(det_raw['cx']),
+                        'cy': int(det_raw['cy']),
+                        'w': int(det_raw['w']),
+                        'h': int(det_raw['h']),
+                        'area_ratio': round(float(det_raw['area_ratio']), 4),
+                        'confidence': round(float(det_raw['confidence']), 3)
                     }
 
             return jsonify({
