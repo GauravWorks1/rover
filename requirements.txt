@@ -1,0 +1,7 @@
+# Rover - Raspberry Pi Dependencies
+# Install: pip install -r requirements.txt
+
+opencv-python-headless>=4.5.0    # OpenCV with DNN module (no GUI needed on rover)
+numpy>=1.21.0                     # Array operations
+pyserial>=3.5                     # Serial communication with Arduino
+imutils>=0.5.4                    # Convenience functions for OpenCV
