@@ -10,6 +10,8 @@ import time
 import threading
 import logging
 import mediapipe as mp
+import mediapipe.python.solutions.pose as mp_pose
+import mediapipe.python.solutions.drawing_utils as mp_drawing
 
 from config import CAMERA_INDEX, CAMERA_FPS
 
@@ -28,14 +30,14 @@ class PersonDetector:
         self._detection_time = 0
         self._fps = 0.0
 
-        # Initialize MediaPipe Pose
-        self.mp_pose = mp.solutions.pose
+        # Initialize MediaPipe Pose explicitly
+        self.mp_pose = mp_pose
         self.pose = self.mp_pose.Pose(
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
             model_complexity=0  # 0 = Lightest/Fastest model
         )
-        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing = mp_drawing
 
     def start(self):
         logger.info("Loading MediaPipe Lightweight Pose Tracker...")
