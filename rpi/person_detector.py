@@ -42,10 +42,16 @@ class PersonDetector:
     def start(self):
         logger.info("Loading Ultra-Lightweight Haar Cascade...")
         
-        # Load the built-in OpenCV Full Body detector
-        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_fullbody.xml')
+        # Switch to UPPER BODY (much more reliable for close-up and rovers)
+        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_upperbody.xml')
         self.cascade = cv2.CascadeClassifier(cascade_path)
         
+        # Fallback to Face detection if upperbody XML is missing on your specific OS
+        if self.cascade.empty():
+            logger.warning("Upperbody missing, falling back to Face detection")
+            cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+            self.cascade = cv2.CascadeClassifier(cascade_path)
+
         if self.cascade.empty():
             raise RuntimeError("Failed to load Haar Cascade XML!")
 
@@ -104,12 +110,12 @@ class PersonDetector:
         # Haar Cascades require grayscale images (makes it much faster!)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Detect bodies
+        # Detect bodies/faces (Loosened rules to detect much easier!)
         boxes = self.cascade.detectMultiScale(
             gray, 
-            scaleFactor=1.1, 
-            minNeighbors=3, 
-            minSize=(30, 80)  # Don't look for tiny specs
+            scaleFactor=1.05,  # Scan more thoroughly
+            minNeighbors=1,    # Highly forgiving (will catch you easily)
+            minSize=(40, 40)   # Allow smaller targets
         )
 
         best_detection = None
