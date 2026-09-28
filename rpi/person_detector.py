@@ -1,15 +1,9 @@
 """
-Person Detection using Google MediaPipe (BlazePose).
+Hybrid Detection + Tracking for Raspberry Pi 4.
 
-Extremely fast on ARM CPUs. Tracks human torso landmarks 
-to perfectly center the rover on a person.
-"""
-
-"""
-Person Detection using OpenCV Haar Cascades (Ultra Lightweight).
-
-Runs extremely fast on Raspberry Pi CPUs without needing 
-any heavy neural networks or external pip packages.
+Uses a Haar Cascade to initially find the person (Detector), 
+then switches to an ultra-fast OpenCV KCF Tracker to follow 
+them at 30 FPS.
 """
 
 import cv2
@@ -26,32 +20,39 @@ class PersonDetector:
     def __init__(self):
         self.cap = None
         self.cascade = None
+        self.tracker = None
+        
         self._running = False
         self._thread = None
-
         self._lock = threading.Lock()
         self._detection = None
         self._frame = None
         self._annotated_frame = None
         self._detection_time = 0
         self._fps = 0.0
+        
+        # Tracking state
+        self.is_tracking = False
+        self.frames_since_detect = 0
+        self.MAX_TRACK_FRAMES = 60  # Re-detect every 60 frames (~2 seconds) to prevent drift
 
-        # Maximize CPU usage
         cv2.setNumThreads(4)
 
+    def _create_tracker(self):
+        """Handle different OpenCV version tracker APIs safely."""
+        try:
+            return cv2.TrackerKCF_create()
+        except AttributeError:
+            # Fallback for OpenCV > 4.5.1 where trackers moved to legacy
+            return cv2.legacy.TrackerKCF_create()
+
     def start(self):
-        logger.info("Loading Ultra-Lightweight Haar Cascade...")
+        logger.info("Loading Hybrid Detect+Track System...")
         
-        # Switch to UPPER BODY (much more reliable for close-up and rovers)
-        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_upperbody.xml')
+        # Load Face/Upperbody Detector
+        cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
         self.cascade = cv2.CascadeClassifier(cascade_path)
         
-        # Fallback to Face detection if upperbody XML is missing on your specific OS
-        if self.cascade.empty():
-            logger.warning("Upperbody missing, falling back to Face detection")
-            cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-            self.cascade = cv2.CascadeClassifier(cascade_path)
-
         if self.cascade.empty():
             raise RuntimeError("Failed to load Haar Cascade XML!")
 
@@ -68,7 +69,7 @@ class PersonDetector:
         self._running = True
         self._thread = threading.Thread(target=self._detect_loop, daemon=True)
         self._thread.start()
-        logger.info("Haar Cascade tracking thread started")
+        logger.info("Hybrid tracking thread started")
 
     def stop(self):
         self._running = False
@@ -106,52 +107,93 @@ class PersonDetector:
 
     def _run_detection(self, frame):
         h, w = frame.shape[:2]
-        
-        # Haar Cascades require grayscale images (makes it much faster!)
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # Detect bodies/faces (Loosened rules to detect much easier!)
-        boxes = self.cascade.detectMultiScale(
-            gray, 
-            scaleFactor=1.05,  # Scan more thoroughly
-            minNeighbors=1,    # Highly forgiving (will catch you easily)
-            minSize=(40, 40)   # Allow smaller targets
-        )
-
-        best_detection = None
-        best_area = 0
         annotated = frame.copy()
+        best_detection = None
 
-        for (x, y, box_w, box_h) in boxes:
-            area = box_w * box_h
-            if area > best_area:
-                best_area = area
+        # ==========================================
+        # MODE 1: TRACKING (Fast, follows pixels)
+        # ==========================================
+        if self.is_tracking:
+            success, box = self.tracker.update(frame)
+            
+            if success:
+                # Tracker was successful
+                x, y, box_w, box_h = [int(v) for v in box]
+                area = box_w * box_h
                 
-                cx = x + (box_w // 2)
-                cy = y + (box_h // 2)
-
                 best_detection = {
-                    'cx': int(cx),
-                    'cy': int(cy),
-                    'w': int(box_w),
-                    'h': int(box_h),
-                    'x1': int(x),
-                    'y1': int(y),
-                    'x2': int(x + box_w),
-                    'y2': int(y + box_h),
-                    'area': int(area),
+                    'cx': x + (box_w // 2),
+                    'cy': y + (box_h // 2),
+                    'w': box_w,
+                    'h': box_h,
+                    'x1': x, 'y1': y,
+                    'x2': x + box_w, 'y2': y + box_h,
+                    'area': area,
                     'area_ratio': float(area) / float(w * h),
-                    'confidence': 1.0  # Cascades don't output confidence natively
+                    'confidence': 1.0
                 }
+                
+                cv2.rectangle(annotated, (x, y), (x + box_w, y + box_h), (0, 255, 255), 2)
+                cv2.putText(annotated, "TRACKING (KCF)", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                
+                self.frames_since_detect += 1
+                
+                # Force a re-detection occasionally to prevent the tracker from drifting
+                if self.frames_since_detect > self.MAX_TRACK_FRAMES:
+                    self.is_tracking = False
+            else:
+                # Tracker lost the target
+                self.is_tracking = False
 
-        if best_detection is not None:
-            d = best_detection
-            # Draw tracking visuals
-            cv2.rectangle(annotated, (d['x1'], d['y1']), (d['x2'], d['y2']), (0, 255, 0), 2)
-            cv2.circle(annotated, (d['cx'], d['cy']), 5, (0, 0, 255), -1)
+        # ==========================================
+        # MODE 2: DETECTING (Find the person initially)
+        # ==========================================
+        if not self.is_tracking:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(30, 30))
+            
+            best_area = 0
+            best_box = None
 
-        cv2.putText(annotated, f"Cascade FPS: {self._fps:.1f}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # Find largest face
+            for (x, y, box_w, box_h) in boxes:
+                area = box_w * box_h
+                if area > best_area:
+                    best_area = area
+                    best_box = (x, y, box_w, box_h)
+            
+            if best_box is not None:
+                x, y, box_w, box_h = best_box
+                
+                best_detection = {
+                    'cx': x + (box_w // 2),
+                    'cy': y + (box_h // 2),
+                    'w': box_w, 'h': box_h,
+                    'x1': x, 'y1': y,
+                    'x2': x + box_w, 'y2': y + box_h,
+                    'area': best_area,
+                    'area_ratio': float(best_area) / float(w * h),
+                    'confidence': 1.0
+                }
+                
+                # Draw red box to show a fresh detection
+                cv2.rectangle(annotated, (x, y), (x + box_w, y + box_h), (0, 0, 255), 2)
+                cv2.putText(annotated, "DETECTED (Haar)", (x, y - 10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+                # Initialize the fast tracker with this bounding box
+                self.tracker = self._create_tracker()
+                self.tracker.init(frame, best_box)
+                self.is_tracking = True
+                self.frames_since_detect = 0
+
+        # Draw crosshair and FPS
+        if best_detection:
+            cv2.circle(annotated, (best_detection['cx'], best_detection['cy']), 5, (0, 0, 255), -1)
+            
+        cv2.putText(annotated, f"Hybrid FPS: {self._fps:.1f}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         cv2.drawMarker(annotated, (w // 2, h // 2), (255, 0, 0), cv2.MARKER_CROSS, 20, 1)
 
         return best_detection, annotated
@@ -177,4 +219,3 @@ class PersonDetector:
 
     def is_running(self):
         return self._running and self._thread is not None and self._thread.is_alive()
-
