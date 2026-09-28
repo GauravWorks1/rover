@@ -1,88 +1,69 @@
 """
-Person Detection using OpenCV HOG Descriptor (Extreme Lightweight).
+Person Detection using Google MediaPipe (BlazePose).
 
-Runs inference in a separate thread for maximum frame rate.
-Requires NO external model files. Uses OpenCV built-in algorithms.
+Extremely fast on ARM CPUs. Tracks human torso landmarks 
+to perfectly center the rover on a person.
 """
 
 import cv2
-import numpy as np
-import threading
 import time
+import threading
 import logging
+import mediapipe as mp
 
-from config import (
-    CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS,
-    CONFIDENCE_THRESHOLD, DETECT_INPUT_WIDTH
-)
+from config import CAMERA_INDEX, CAMERA_FPS
 
 logger = logging.getLogger(__name__)
 
-
 class PersonDetector:
-    """
-    Threaded person detector using OpenCV HOG (Extremely Lightweight).
-    """
-
     def __init__(self):
         self.cap = None
-        self.hog = None
         self._running = False
         self._thread = None
 
-        # Latest detection result (thread-safe)
         self._lock = threading.Lock()
         self._detection = None
         self._frame = None
         self._annotated_frame = None
         self._detection_time = 0
         self._fps = 0.0
-        
-        # Maximize OpenCV CPU threads
-        cv2.setNumThreads(4)
+
+        # Initialize MediaPipe Pose
+        self.mp_pose = mp.solutions.pose
+        self.pose = self.mp_pose.Pose(
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+            model_complexity=0  # 0 = Lightest/Fastest model
+        )
+        self.mp_drawing = mp.solutions.drawing_utils
 
     def start(self):
-        """Initialize camera and HOG detector, start detection thread."""
-        logger.info("Loading Lightweight HOG People Detector...")
+        logger.info("Loading MediaPipe Lightweight Pose Tracker...")
         
-        # Initialize the HOG descriptor/person detector
-        self.hog = cv2.HOGDescriptor()
-        self.hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
-        logger.info("HOG loaded successfully")
-
-        # Open camera
-        logger.info(f"Opening camera index {CAMERA_INDEX}...")
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
         
-        # Force lower resolution for speed
+        # Lower resolution for massive speed boost
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
         if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open camera index {CAMERA_INDEX}")
+            raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
 
-        actual_w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        logger.info(f"Camera opened: {actual_w}x{actual_h}")
-
-        # Start detection thread
         self._running = True
         self._thread = threading.Thread(target=self._detect_loop, daemon=True)
         self._thread.start()
-        logger.info("Lightweight person detection thread started")
+        logger.info("MediaPipe tracking thread started")
 
     def stop(self):
-        """Stop detection thread and release camera."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=3.0)
         if self.cap:
             self.cap.release()
-        logger.info("Person detector stopped")
+        self.pose.close()
 
     def _detect_loop(self):
-        """Main detection loop running in a background thread."""
         frame_count = 0
         fps_start_time = time.time()
 
@@ -92,10 +73,9 @@ class PersonDetector:
                 time.sleep(0.01)
                 continue
 
-            # Run HOG detection
+            # Run MediaPipe tracking
             detection, annotated = self._run_detection(frame)
 
-            # Update shared state
             with self._lock:
                 self._frame = frame
                 self._annotated_frame = annotated
@@ -103,89 +83,88 @@ class PersonDetector:
                 if detection is not None:
                     self._detection_time = time.time()
 
-            # FPS calculation
+            # FPS calc
             frame_count += 1
             elapsed = time.time() - fps_start_time
-            if elapsed >= 2.0:
+            if elapsed >= 1.0:
                 self._fps = frame_count / elapsed
                 frame_count = 0
                 fps_start_time = time.time()
 
     def _run_detection(self, frame):
-        """Run HOG detection on a single frame."""
         h, w = frame.shape[:2]
-
-        # Detect people in the image
-        # winStride determines step size (smaller = more accurate but slower)
-        # scale determines image pyramid scale (smaller = more accurate but slower)
-        boxes, weights = self.hog.detectMultiScale(
-            frame, 
-            winStride=(8, 8), 
-            padding=(4, 4), 
-            scale=1.05
-        )
+        
+        # MediaPipe needs RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(rgb_frame)
 
         best_detection = None
-        best_area = 0
+        annotated = frame.copy()
 
-        # Find the largest bounding box (closest person)
-        for i, (x, y, box_w, box_h) in enumerate(boxes):
-            confidence = weights[i]
+        if results.pose_landmarks:
+            # We track the torso (Midpoint between shoulders and hips)
+            landmarks = results.pose_landmarks.landmark
             
-            # HOG returns very different confidence numbers than DNN. 
-            # Usually > 0.5 is okay, > 1.0 is very confident.
-            if confidence < 0.3:
-                continue
+            # Get key points (normalized 0.0 to 1.0)
+            l_shoulder = landmarks[self.mp_pose.PoseLandmark.LEFT_SHOULDER]
+            r_shoulder = landmarks[self.mp_pose.PoseLandmark.RIGHT_SHOULDER]
+            l_hip = landmarks[self.mp_pose.PoseLandmark.LEFT_HIP]
+            r_hip = landmarks[self.mp_pose.PoseLandmark.RIGHT_HIP]
 
-            area = box_w * box_h
+            # Only track if we can see the upper body
+            if l_shoulder.visibility > 0.5 or r_shoulder.visibility > 0.5:
+                
+                # Calculate bounding box from shoulders to hips
+                x_coords = [l_shoulder.x, r_shoulder.x, l_hip.x, r_hip.x]
+                y_coords = [l_shoulder.y, r_shoulder.y, l_hip.y, r_hip.y]
+                
+                x_min = max(0, min(x_coords))
+                x_max = min(1, max(x_coords))
+                y_min = max(0, min(y_coords))
+                y_max = min(1, max(y_coords))
 
-            if area > best_area:
-                best_area = area
+                box_w = (x_max - x_min) * w
+                box_h = (y_max - y_min) * h
+                area = box_w * box_h
+
+                cx = int(((x_min + x_max) / 2) * w)
+                cy = int(((y_min + y_max) / 2) * h)
+
                 best_detection = {
-                    'cx': int(x + (box_w / 2)),
-                    'cy': int(y + (box_h / 2)),
+                    'cx': cx,
+                    'cy': cy,
                     'w': int(box_w),
                     'h': int(box_h),
-                    'x1': int(x), 'y1': int(y),
-                    'x2': int(x + box_w), 'y2': int(y + box_h),
+                    'x1': int(x_min * w),
+                    'y1': int(y_min * h),
+                    'x2': int(x_max * w),
+                    'y2': int(y_max * h),
                     'area': int(area),
                     'area_ratio': float(area) / float(w * h),
-                    'confidence': float(confidence)
+                    'confidence': float((l_shoulder.visibility + r_shoulder.visibility) / 2)
                 }
 
-        # Draw annotation on frame copy
-        annotated = frame.copy()
-        if best_detection is not None:
-            d = best_detection
-            # Green bounding box
-            cv2.rectangle(annotated, (d['x1'], d['y1']), (d['x2'], d['y2']),
-                          (0, 255, 0), 2)
-            # Center crosshair
-            cv2.circle(annotated, (d['cx'], d['cy']), 5, (0, 0, 255), -1)
-            # Label
-            cv2.putText(annotated, f"Person {d['confidence']:.2f}", (d['x1'], d['y1'] - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                # Draw tracking visuals
+                self.mp_drawing.draw_landmarks(
+                    annotated, 
+                    results.pose_landmarks, 
+                    self.mp_pose.POSE_CONNECTIONS
+                )
+                cv2.rectangle(annotated, (best_detection['x1'], best_detection['y1']), 
+                             (best_detection['x2'], best_detection['y2']), (0, 255, 0), 2)
+                cv2.circle(annotated, (cx, cy), 5, (0, 0, 255), -1)
 
-        # Draw frame center crosshair
-        cv2.drawMarker(annotated, (w // 2, h // 2), (255, 0, 0),
-                       cv2.MARKER_CROSS, 20, 1)
-
-        # FPS overlay
-        cv2.putText(annotated, f"HOG FPS: {self._fps:.1f}", (10, 30),
+        cv2.putText(annotated, f"MediaPipe FPS: {self._fps:.1f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        cv2.drawMarker(annotated, (w // 2, h // 2), (255, 0, 0), cv2.MARKER_CROSS, 20, 1)
 
         return best_detection, annotated
-
-    # =========================================================================
-    # Public API
-    # =========================================================================
 
     def get_detection(self):
         with self._lock:
             if self._detection is None:
                 return None, float('inf')
-            age = time.time() - self._detection_time
-            return dict(self._detection), age
+            return dict(self._detection), time.time() - self._detection_time
 
     def get_frame(self):
         with self._lock:
