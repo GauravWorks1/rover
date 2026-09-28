@@ -6,7 +6,7 @@ All tunable parameters in one place.
 # ==============================================================================
 # Serial Communication (RPi <-> Arduino)
 # ==============================================================================
-SERIAL_PORT = '/dev/ttyACM0'      # Arduino Mega USB serial
+SERIAL_PORT = '/dev/ttyUSB0'      # Arduino Mega USB serial
 SERIAL_BAUD = 115200
 SERIAL_TIMEOUT = 0.05             # 50ms read timeout
 

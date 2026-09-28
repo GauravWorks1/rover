@@ -3,6 +3,7 @@ Main Rover Controller — orchestrates all subsystems.
 
 Manages mode switching between RC and Follow-Me,
 coordinates person detection, PID following, and serial communication.
+Includes a web-based live monitoring dashboard.
 """
 
 import time
@@ -15,6 +16,7 @@ from config import (
     MODE_RC, MODE_FOLLOW, MODE_FAILSAFE,
     CONTROL_LOOP_RATE, LOST_TARGET_TIMEOUT
 )
+from web_monitor import WebMonitor
 from serial_comm import SerialComm
 from person_detector import PersonDetector
 from follow_controller import FollowController
@@ -32,10 +34,12 @@ class RoverController:
       - MODE_FAILSAFE: Everything stopped. Arduino handles this internally.
     """
 
-    def __init__(self, serial_port=None, no_camera=False):
+    def __init__(self, serial_port=None, no_camera=False, web_port=5000):
         self.serial = SerialComm(port=serial_port) if serial_port else SerialComm()
         self.detector = PersonDetector()
         self.follower = FollowController()
+        self.web_monitor = None
+        self.web_port = web_port
 
         self.no_camera = no_camera  # for testing without webcam
         self._running = False
@@ -68,6 +72,11 @@ class RoverController:
                 logger.error(f"Failed to start person detector: {e}")
                 logger.warning("Running without camera — RC mode only")
                 self.no_camera = True
+
+        # Start web monitor dashboard
+        logger.info("Starting web monitor...")
+        self.web_monitor = WebMonitor(self, port=self.web_port)
+        self.web_monitor.start()
 
         # Register signal handlers for clean shutdown
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -201,6 +210,11 @@ class RoverController:
         # Compute motor commands via PID
         speed, steer = self.follower.compute(detection, age)
 
+        # Update web monitor with current values
+        if self.web_monitor:
+            self.web_monitor.current_speed = speed
+            self.web_monitor.current_steer = steer
+
         # Send to Arduino
         self.serial.send_drive(speed, steer)
 
@@ -251,6 +265,8 @@ def main():
                         help="Enable debug logging")
     parser.add_argument("--log-file", type=str, default=None,
                         help="Log to file (in addition to console)")
+    parser.add_argument("--web-port", type=int, default=5000,
+                        help="Web monitor port (default: 5000)")
     args = parser.parse_args()
 
     # Configure logging
@@ -268,7 +284,8 @@ def main():
     # Start rover
     rover = RoverController(
         serial_port=args.port,
-        no_camera=args.no_camera
+        no_camera=args.no_camera,
+        web_port=args.web_port
     )
     rover.start()
 
