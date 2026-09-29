@@ -91,6 +91,7 @@
 #define RC_CENTER       1500
 #define RC_MIN          1000
 #define RC_MAX          2000
+#define RC_DEADZONE     50    // ±50 around center = deadzone
 #define MODE_SWITCH_HIGH 1650  // SwA UP   (~1900-2000) = RC mode
 #define MODE_SWITCH_LOW  1350  // SwA DOWN (~1000-1100) = Follow mode
 
