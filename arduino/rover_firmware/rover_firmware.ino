@@ -92,8 +92,8 @@
 #define RC_MIN          1000
 #define RC_MAX          2000
 #define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_HIGH 1350  // Any switch position above DOWN (~1000) triggers Follow
-#define MODE_SWITCH_LOW  1250  // Switch DOWN (~1000) = RC mode
+#define MODE_SWITCH_HIGH 1650  // Switch UP (~1900-2000) = Follow mode
+#define MODE_SWITCH_LOW  1350  // Switch DOWN (~1000-1100) = RC mode
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
@@ -129,10 +129,12 @@ void isr_ch1() {
     if (digitalRead(RC_PIN_CH1) == HIGH) {
         rc_ch1_rise = micros();
     } else {
-        uint16_t pw = (uint16_t)(micros() - rc_ch1_rise);
-        if (pw >= 800 && pw <= 2200) {
-            rc_ch1_raw = pw;
-            rc_last_update = millis();
+        if (rc_ch1_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch1_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch1_raw = pw;
+                rc_last_update = millis();
+            }
         }
     }
 }
@@ -141,10 +143,12 @@ void isr_ch2() {
     if (digitalRead(RC_PIN_CH2) == HIGH) {
         rc_ch2_rise = micros();
     } else {
-        uint16_t pw = (uint16_t)(micros() - rc_ch2_rise);
-        if (pw >= 800 && pw <= 2200) {
-            rc_ch2_raw = pw;
-            rc_last_update = millis();
+        if (rc_ch2_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch2_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch2_raw = pw;
+                rc_last_update = millis();
+            }
         }
     }
 }
@@ -153,10 +157,12 @@ void isr_ch3() {
     if (digitalRead(RC_PIN_CH3) == HIGH) {
         rc_ch3_rise = micros();
     } else {
-        uint16_t pw = (uint16_t)(micros() - rc_ch3_rise);
-        if (pw >= 800 && pw <= 2200) {
-            rc_ch3_raw = pw;
-            rc_last_update = millis();
+        if (rc_ch3_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch3_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch3_raw = pw;
+                rc_last_update = millis();
+            }
         }
     }
 }
@@ -165,10 +171,12 @@ void isr_ch5() {
     if (digitalRead(RC_PIN_CH5) == HIGH) {
         rc_ch5_rise = micros();
     } else {
-        uint16_t pw = (uint16_t)(micros() - rc_ch5_rise);
-        if (pw >= 800 && pw <= 2200) {
-            rc_ch5_raw = pw;
-            rc_last_update = millis();
+        if (rc_ch5_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch5_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch5_raw = pw;
+                rc_last_update = millis();
+            }
         }
     }
 }
@@ -177,10 +185,12 @@ void isr_ch6() {
     if (digitalRead(RC_PIN_CH6) == HIGH) {
         rc_ch6_rise = micros();
     } else {
-        uint16_t pw = (uint16_t)(micros() - rc_ch6_rise);
-        if (pw >= 800 && pw <= 2200) {
-            rc_ch6_raw = pw;
-            rc_last_update = millis();
+        if (rc_ch6_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch6_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch6_raw = pw;
+                rc_last_update = millis();
+            }
         }
     }
 }
@@ -400,14 +410,32 @@ void parseCommand() {
 // ============================================================================
 
 void updateMode() {
-    // Mode switching is 100% MANUAL — strictly controlled by FlySky CH5 switch!
-    // No software timeouts, no watchdog overrides, no automatic flipping.
+    // Mode switching is 100% MANUAL with a 10-cycle debounce filter (100ms)
+    // Eliminates any transient pulse noise or jitter from the receiver!
+    static uint8_t followCount = 0;
+    static uint8_t rcCount = 0;
+
     if (rcChannels[4] > MODE_SWITCH_HIGH) {
-        currentMode = MODE_FOLLOW;
+        followCount++;
+        rcCount = 0;
+        // Must stay solidly HIGH for 10 consecutive cycles (~100ms)
+        if (followCount >= 10) {
+            currentMode = MODE_FOLLOW;
+            followCount = 10;  // clamp
+        }
     } else if (rcChannels[4] < MODE_SWITCH_LOW) {
-        currentMode = MODE_RC;
+        rcCount++;
+        followCount = 0;
+        // Must stay solidly LOW for 10 consecutive cycles (~100ms)
+        if (rcCount >= 10) {
+            currentMode = MODE_RC;
+            rcCount = 10;  // clamp
+        }
+    } else {
+        // In deadband: reset counters, keep current mode
+        followCount = 0;
+        rcCount = 0;
     }
-    // In deadband (1400-1600): retains current mode, zero jitter!
 }
 
 // ============================================================================
