@@ -92,8 +92,8 @@
 #define RC_MIN          1000
 #define RC_MAX          2000
 #define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_HIGH 1650  // SwA UP   (~1900-2000) = RC mode
-#define MODE_SWITCH_LOW  1350  // SwA DOWN (~1000-1100) = Follow mode
+#define MODE_SWITCH_HIGH 1450  // SwA UP   (1500 to 2000) = RC mode
+#define MODE_SWITCH_LOW  1350  // SwA DOWN (~1000-1100)   = Follow mode
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
@@ -113,7 +113,7 @@
 volatile uint16_t rc_ch1_raw = 1500;
 volatile uint16_t rc_ch2_raw = 1500;
 volatile uint16_t rc_ch3_raw = 1500;
-volatile uint16_t rc_ch5_raw = 1000;
+volatile uint16_t rc_ch5_raw = 1900;
 volatile uint16_t rc_ch6_raw = 1500;
 
 volatile unsigned long rc_ch1_rise = 0;
@@ -206,7 +206,7 @@ unsigned long lastRpiCmdTime = 0;
 unsigned long lastStatusSendTime = 0;
 
 // RC channel values (copied from ISR safely)
-int16_t rcChannels[6] = {1500, 1500, 1500, 1500, 1000, 1500};
+int16_t rcChannels[6] = {1500, 1500, 1500, 1500, 1900, 1500};
 
 // RPi command values
 int16_t rpiSpeed = 0;     // -255 to 255
@@ -420,17 +420,17 @@ void updateMode() {
         // SwA DOWN -> FOLLOW MODE
         followCount++;
         rcCount = 0;
-        if (followCount >= 10) {
+        if (followCount >= 5) {
             currentMode = MODE_FOLLOW;
-            followCount = 10;  // clamp
+            followCount = 5;  // clamp
         }
     } else if (rcChannels[4] > MODE_SWITCH_HIGH) {
         // SwA UP -> RC MODE
         rcCount++;
         followCount = 0;
-        if (rcCount >= 10) {
+        if (rcCount >= 5) {
             currentMode = MODE_RC;
-            rcCount = 10;  // clamp
+            rcCount = 5;  // clamp
         }
     } else {
         // In deadband: reset counters, keep current mode
