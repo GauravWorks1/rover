@@ -12,7 +12,7 @@ import time
 import logging
 
 from config import (
-    FRAME_CENTER_X, FRAME_AREA,
+    FRAME_CENTER_X,
     TARGET_AREA_RATIO,
     KP_STEER, KI_STEER, KD_STEER,
     KP_SPEED, KI_SPEED, KD_SPEED,

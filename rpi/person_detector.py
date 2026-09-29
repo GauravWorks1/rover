@@ -39,12 +39,18 @@ class PersonDetector:
         cv2.setNumThreads(4)
 
     def _create_tracker(self):
-        """Handle different OpenCV version tracker APIs safely."""
+        """Handle different OpenCV version tracker APIs safely. Use MOSSE for max speed."""
         try:
-            return cv2.TrackerKCF_create()
+            return cv2.TrackerMOSSE_create()
         except AttributeError:
-            # Fallback for OpenCV > 4.5.1 where trackers moved to legacy
-            return cv2.legacy.TrackerKCF_create()
+            try:
+                return cv2.legacy.TrackerMOSSE_create()
+            except AttributeError:
+                # Fallback to KCF if MOSSE is missing in this OpenCV version
+                try:
+                    return cv2.TrackerKCF_create()
+                except AttributeError:
+                    return cv2.legacy.TrackerKCF_create()
 
     def start(self):
         logger.info("Loading Hybrid Detect+Track System...")
@@ -134,7 +140,7 @@ class PersonDetector:
                 }
                 
                 cv2.rectangle(annotated, (x, y), (x + box_w, y + box_h), (0, 255, 255), 2)
-                cv2.putText(annotated, "TRACKING (KCF)", (x, y - 10), 
+                cv2.putText(annotated, "TRACKING (MOSSE)", (x, y - 10), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 
                 self.frames_since_detect += 1

@@ -41,34 +41,43 @@
 
 | Arduino Pin | Type | Function           | Connected To              |
 |-------------|------|--------------------|---------------------------|
-| D2          | PWM  | FL Motor Speed     | Driver #1, CH-A PWM Input |
+| D4          | PWM  | FL Motor Speed     | Driver #1, CH-A PWM Input |
 | D22         | DIG  | FL Motor Direction | Driver #1, CH-A DIR Input |
-| D3          | PWM  | FR Motor Speed     | Driver #1, CH-B PWM Input |
+| D5          | PWM  | FR Motor Speed     | Driver #1, CH-B PWM Input |
 | D23         | DIG  | FR Motor Direction | Driver #1, CH-B DIR Input |
-| D4          | PWM  | RL Motor Speed     | Driver #2, CH-A PWM Input |
+| D6          | PWM  | RL Motor Speed     | Driver #2, CH-A PWM Input |
 | D24         | DIG  | RL Motor Direction | Driver #2, CH-A DIR Input |
-| D5          | PWM  | RR Motor Speed     | Driver #2, CH-B PWM Input |
+| D7          | PWM  | RR Motor Speed     | Driver #2, CH-B PWM Input |
 | D25         | DIG  | RR Motor Direction | Driver #2, CH-B DIR Input |
 
 ### Steering Actuators → SmartElex 15D Drivers #3 & #4 (12V)
 
 | Arduino Pin | Type | Function           | Connected To              |
 |-------------|------|--------------------|---------------------------|
-| D6          | PWM  | FL Actuator Speed  | Driver #3, CH-A PWM Input |
+| D8          | PWM  | FL Actuator Speed  | Driver #3, CH-A PWM Input |
 | D26         | DIG  | FL Actuator Dir    | Driver #3, CH-A DIR Input |
-| D7          | PWM  | FR Actuator Speed  | Driver #3, CH-B PWM Input |
+| D9          | PWM  | FR Actuator Speed  | Driver #3, CH-B PWM Input |
 | D27         | DIG  | FR Actuator Dir    | Driver #3, CH-B DIR Input |
-| D8          | PWM  | RL Actuator Speed  | Driver #4, CH-A PWM Input |
+| D10         | PWM  | RL Actuator Speed  | Driver #4, CH-A PWM Input |
 | D28         | DIG  | RL Actuator Dir    | Driver #4, CH-A DIR Input |
-| D9          | PWM  | RR Actuator Speed  | Driver #4, CH-B PWM Input |
+| D11         | PWM  | RR Actuator Speed  | Driver #4, CH-B PWM Input |
 | D29         | DIG  | RR Actuator Dir    | Driver #4, CH-B DIR Input |
+
+### RC Receiver (FS-iA6) → Arduino Mega (INTERRUPT PINS)
+
+| Arduino Pin | Interrupt | Function      | Connected To                    |
+|-------------|-----------|---------------|---------------------------------|
+| D2          | INT0      | CH1 Steering  | FS-iA6 CH1 Signal (White wire) |
+| D3          | INT1      | CH2 Throttle  | FS-iA6 CH2 Signal (White wire) |
+| D18         | INT5      | CH3 Aux       | FS-iA6 CH3 Signal (White wire) |
+| D19         | INT4      | CH5 Mode Sw   | FS-iA6 CH5 Signal (White wire) |
+| D20         | INT3      | CH6 Speed Lim | FS-iA6 CH6 Signal (White wire) |
 
 ### Communication
 
 | Arduino Pin | Function              | Connected To                   |
 |-------------|-----------------------|--------------------------------|
 | Serial0 USB | RPi Communication     | RPi 4B USB Port (via USB cable)|
-| Pin 19 (RX1)| FlySky iBus Input    | FlySky Receiver iBus/Servo Pin |
 
 ### Grounds (CRITICAL)
 
@@ -79,6 +88,7 @@
 | Arduino GND → Driver #2 GND | Shared signal ground              |
 | Arduino GND → Driver #3 GND | Shared signal ground              |
 | Arduino GND → Driver #4 GND | Shared signal ground              |
+| Arduino GND → FS-iA6 GND   | Shared signal ground              |
 | 24V Battery GND → Driver #1 GND | Power ground                  |
 | 24V Battery GND → Driver #2 GND | Power ground                  |
 | 12V Battery GND → Driver #3 GND | Power ground                  |
@@ -99,14 +109,27 @@ Set ALL 4 drivers to **PWM Input Mode**:
 > **IMPORTANT**: Set the I/P Logic Select jumper to **5V** on all drivers
 > (since Arduino Mega is 5V logic).
 
-## FlySky Receiver Wiring
+## FlySky FS-iA6 Receiver Wiring
 
 ```
-FlySky Receiver (e.g., FS-iA6B)
-    ├── iBus/Servo Pin ──────── Arduino Mega Pin 19 (RX1)
-    ├── VCC ─────────────────── 5V (from BEC or Arduino 5V)
-    └── GND ─────────────────── Arduino GND
+FS-iA6 Receiver (6 channel PWM output)
+Each channel has 3 pins: Signal (top) / VCC (middle) / GND (bottom)
+
+Power (connect to ANY ONE channel's VCC/GND):
+    ├── VCC (Red wire)  ────────── Arduino 5V
+    └── GND (Brown wire) ───────── Arduino GND
+
+Signal wires (White wire from each channel):
+    ├── CH1 Signal ──────────────── Arduino Pin 2  (Steering)
+    ├── CH2 Signal ──────────────── Arduino Pin 3  (Throttle)
+    ├── CH3 Signal ──────────────── Arduino Pin 18 (Aux)
+    ├── CH4 Signal ──────────────── (NOT CONNECTED)
+    ├── CH5 Signal ──────────────── Arduino Pin 19 (Mode Switch)
+    └── CH6 Signal ──────────────── Arduino Pin 20 (Speed Limit)
 ```
+
+> **NOTE**: You only need to connect VCC and GND from ONE channel row.
+> All channels share the same power rail internally.
 
 ## Power Distribution
 

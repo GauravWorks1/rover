@@ -4,8 +4,10 @@
  * ============================================================================
  *
  *  Controls 4 drive motors + 4 steering actuators via SmartElex 15D drivers.
- *  Reads FlySky iBus receiver for RC control.
+ *  Reads FlySky FS-iA6 receiver via INDIVIDUAL PWM channels (no iBus needed).
  *  Receives autonomous commands from Raspberry Pi via USB Serial.
+ *
+ *  RECEIVER: FlySky FS-iA6 (PWM output on each channel pin)
  *
  *  DRIVER ASSIGNMENT (Mixed Voltage Fix):
  *    Driver #1 (24V): CH-A = FL Motor,    CH-B = FR Motor
@@ -28,7 +30,7 @@
  * ============================================================================
  */
 
-#include <IBusBM.h>
+// NO iBus library needed! We read PWM directly.
 
 // ============================================================================
 //  PIN DEFINITIONS
@@ -36,24 +38,35 @@
 
 // Drive Motors (SmartElex 15D drivers #1 and #2 — 24V)
 // Each motor: PWM pin (speed) + DIR pin (direction)
-#define FL_MOTOR_PWM   2
+#define FL_MOTOR_PWM   4
 #define FL_MOTOR_DIR   22
-#define FR_MOTOR_PWM   3
+#define FR_MOTOR_PWM   5
 #define FR_MOTOR_DIR   23
-#define RL_MOTOR_PWM   4
+#define RL_MOTOR_PWM   6
 #define RL_MOTOR_DIR   24
-#define RR_MOTOR_PWM   5
+#define RR_MOTOR_PWM   7
 #define RR_MOTOR_DIR   25
 
 // Steering Actuators (SmartElex 15D drivers #3 and #4 — 12V)
-#define FL_ACTU_PWM    6
+#define FL_ACTU_PWM    8
 #define FL_ACTU_DIR    26
-#define FR_ACTU_PWM    7
+#define FR_ACTU_PWM    9
 #define FR_ACTU_DIR    27
-#define RL_ACTU_PWM    8
+#define RL_ACTU_PWM    10
 #define RL_ACTU_DIR    28
-#define RR_ACTU_PWM    9
+#define RR_ACTU_PWM    11
 #define RR_ACTU_DIR    29
+
+// -------------------------------------------------------
+//  RC RECEIVER PINS (FS-iA6 PWM outputs)
+//  These MUST be interrupt-capable pins on the Mega!
+//  Mega interrupt pins: 2, 3, 18, 19, 20, 21
+// -------------------------------------------------------
+#define RC_PIN_CH1     2    // CH1 Steering   (INT0)
+#define RC_PIN_CH2     3    // CH2 Throttle   (INT1)
+#define RC_PIN_CH3     18   // CH3 Aux        (INT5)
+#define RC_PIN_CH5     19   // CH5 Mode switch(INT4)
+#define RC_PIN_CH6     20   // CH6 Speed limit(INT3)
 
 // ============================================================================
 //  CONSTANTS
@@ -74,14 +87,6 @@
 #define MODE_FOLLOW     1
 #define MODE_FAILSAFE   2
 
-// RC channel mapping (iBus channel indices, 0-based)
-#define RC_CH_STEER     0   // CH1: Left/Right stick
-#define RC_CH_THROTTLE  1   // CH2: Forward/Reverse stick
-#define RC_CH_AUX       2   // CH3: Aux / speed trim
-#define RC_CH_ROTATE    3   // CH4: Rotation (spin in place)
-#define RC_CH_MODE      4   // CH5: Mode switch (2-pos)
-#define RC_CH_LIMIT     5   // CH6: Speed limiter
-
 // RC values
 #define RC_CENTER       1500
 #define RC_MIN          1000
@@ -91,7 +96,7 @@
 
 // Safety
 #define SERIAL_WATCHDOG_MS  500   // Stop if no RPi command for this long
-#define IBUS_TIMEOUT_MS     500   // Stop if no iBus signal for this long
+#define RC_TIMEOUT_MS       500   // Stop if no RC signal for this long
 #define SOFT_START_STEP     5     // Max PWM change per loop iteration
 #define STATUS_SEND_INTERVAL_MS 100  // Send status to RPi every 100ms
 
@@ -100,19 +105,96 @@
 #define ACTUATOR_PWM    200   // Actuator speed (fixed, they're either on or off)
 
 // ============================================================================
+//  RC PWM READING (Interrupt-driven)
+// ============================================================================
+
+// Volatile variables shared between ISR and main loop
+volatile uint16_t rc_ch1_raw = 1500;
+volatile uint16_t rc_ch2_raw = 1500;
+volatile uint16_t rc_ch3_raw = 1500;
+volatile uint16_t rc_ch5_raw = 1000;
+volatile uint16_t rc_ch6_raw = 1500;
+
+volatile unsigned long rc_ch1_rise = 0;
+volatile unsigned long rc_ch2_rise = 0;
+volatile unsigned long rc_ch3_rise = 0;
+volatile unsigned long rc_ch5_rise = 0;
+volatile unsigned long rc_ch6_rise = 0;
+
+volatile unsigned long rc_last_update = 0;  // Timestamp of last valid pulse
+
+// ISR for each channel: measure pulse width (HIGH time)
+void isr_ch1() {
+    if (digitalRead(RC_PIN_CH1) == HIGH) {
+        rc_ch1_rise = micros();
+    } else {
+        uint16_t pw = (uint16_t)(micros() - rc_ch1_rise);
+        if (pw >= 800 && pw <= 2200) {
+            rc_ch1_raw = pw;
+            rc_last_update = millis();
+        }
+    }
+}
+
+void isr_ch2() {
+    if (digitalRead(RC_PIN_CH2) == HIGH) {
+        rc_ch2_rise = micros();
+    } else {
+        uint16_t pw = (uint16_t)(micros() - rc_ch2_rise);
+        if (pw >= 800 && pw <= 2200) {
+            rc_ch2_raw = pw;
+            rc_last_update = millis();
+        }
+    }
+}
+
+void isr_ch3() {
+    if (digitalRead(RC_PIN_CH3) == HIGH) {
+        rc_ch3_rise = micros();
+    } else {
+        uint16_t pw = (uint16_t)(micros() - rc_ch3_rise);
+        if (pw >= 800 && pw <= 2200) {
+            rc_ch3_raw = pw;
+            rc_last_update = millis();
+        }
+    }
+}
+
+void isr_ch5() {
+    if (digitalRead(RC_PIN_CH5) == HIGH) {
+        rc_ch5_rise = micros();
+    } else {
+        uint16_t pw = (uint16_t)(micros() - rc_ch5_rise);
+        if (pw >= 800 && pw <= 2200) {
+            rc_ch5_raw = pw;
+            rc_last_update = millis();
+        }
+    }
+}
+
+void isr_ch6() {
+    if (digitalRead(RC_PIN_CH6) == HIGH) {
+        rc_ch6_rise = micros();
+    } else {
+        uint16_t pw = (uint16_t)(micros() - rc_ch6_rise);
+        if (pw >= 800 && pw <= 2200) {
+            rc_ch6_raw = pw;
+            rc_last_update = millis();
+        }
+    }
+}
+
+// ============================================================================
 //  GLOBAL VARIABLES
 // ============================================================================
 
-IBusBM ibus;
-
 // Current state
 uint8_t currentMode = MODE_RC;
-bool ibusConnected = false;
-unsigned long lastIbusTime = 0;
+bool rcConnected = false;
 unsigned long lastRpiCmdTime = 0;
 unsigned long lastStatusSendTime = 0;
 
-// RC channel values (raw, 1000-2000)
+// RC channel values (copied from ISR safely)
 int16_t rcChannels[6] = {1500, 1500, 1500, 1500, 1000, 1500};
 
 // RPi command values
@@ -124,12 +206,6 @@ int16_t currentMotorFL = 0;
 int16_t currentMotorFR = 0;
 int16_t currentMotorRL = 0;
 int16_t currentMotorRR = 0;
-
-// Current actuator outputs (-255 to 255, positive = extend, negative = retract)
-int16_t currentActuFL = 0;
-int16_t currentActuFR = 0;
-int16_t currentActuRL = 0;
-int16_t currentActuRR = 0;
 
 // Serial receive buffer
 uint8_t rxBuffer[CMD_PACKET_SIZE];
@@ -143,8 +219,19 @@ void setup() {
     // USB Serial to RPi
     Serial.begin(115200);
 
-    // iBus from FlySky receiver on Serial1
-    ibus.begin(Serial1);
+    // Configure RC receiver input pins
+    pinMode(RC_PIN_CH1, INPUT);
+    pinMode(RC_PIN_CH2, INPUT);
+    pinMode(RC_PIN_CH3, INPUT);
+    pinMode(RC_PIN_CH5, INPUT);
+    pinMode(RC_PIN_CH6, INPUT);
+
+    // Attach interrupts (CHANGE = fires on both rising and falling edges)
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH1), isr_ch1, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH2), isr_ch2, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH3), isr_ch3, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH5), isr_ch5, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH6), isr_ch6, CHANGE);
 
     // Configure motor pins
     pinMode(FL_MOTOR_PWM, OUTPUT);  pinMode(FL_MOTOR_DIR, OUTPUT);
@@ -162,7 +249,7 @@ void setup() {
     stopAllMotors();
 
     delay(1000);
-    Serial.println("ROVER FIRMWARE READY");
+    Serial.println("ROVER FIRMWARE READY (PWM RC Mode)");
 }
 
 // ============================================================================
@@ -170,8 +257,8 @@ void setup() {
 // ============================================================================
 
 void loop() {
-    // 1. Read iBus channels from FlySky receiver
-    readIBus();
+    // 1. Read RC channels from interrupt data
+    readRC();
 
     // 2. Read serial commands from RPi
     readSerialCommands();
@@ -204,32 +291,26 @@ void loop() {
 }
 
 // ============================================================================
-//  iBus READING
+//  RC READING (from interrupts)
 // ============================================================================
 
-void readIBus() {
-    // IBusBM library handles reading internally via loop()
-    // We just need to call readChannel()
+void readRC() {
+    // Safely copy volatile ISR values with interrupts disabled
+    noInterrupts();
+    rcChannels[0] = rc_ch1_raw;  // CH1 Steer
+    rcChannels[1] = rc_ch2_raw;  // CH2 Throttle
+    rcChannels[2] = rc_ch3_raw;  // CH3 Aux
+    rcChannels[3] = 1500;        // CH4 not wired (no pin left), default center
+    rcChannels[4] = rc_ch5_raw;  // CH5 Mode
+    rcChannels[5] = rc_ch6_raw;  // CH6 Speed limit
+    unsigned long lastUpdate = rc_last_update;
+    interrupts();
 
-    // Check if we're getting valid data
-    int ch1 = ibus.readChannel(RC_CH_STEER);
-
-    if (ch1 > 0) {
-        // Valid iBus data received
-        rcChannels[0] = ch1;
-        rcChannels[1] = ibus.readChannel(RC_CH_THROTTLE);
-        rcChannels[2] = ibus.readChannel(RC_CH_AUX);
-        rcChannels[3] = ibus.readChannel(RC_CH_ROTATE);
-        rcChannels[4] = ibus.readChannel(RC_CH_MODE);
-        rcChannels[5] = ibus.readChannel(RC_CH_LIMIT);
-
-        lastIbusTime = millis();
-        ibusConnected = true;
+    // Check for RC signal timeout
+    if (millis() - lastUpdate < RC_TIMEOUT_MS) {
+        rcConnected = true;
     } else {
-        // Check for iBus timeout
-        if (millis() - lastIbusTime > IBUS_TIMEOUT_MS) {
-            ibusConnected = false;
-        }
+        rcConnected = false;
     }
 }
 
@@ -314,8 +395,8 @@ void parseCommand() {
 // ============================================================================
 
 void updateMode() {
-    // Priority 1: iBus signal lost -> FAILSAFE
-    if (!ibusConnected) {
+    // Priority 1: RC signal lost -> FAILSAFE
+    if (!rcConnected) {
         currentMode = MODE_FAILSAFE;
         return;
     }
@@ -344,11 +425,9 @@ void executeRCMode() {
     // Map RC sticks to motor commands
     // CH2 (throttle): 1000=full reverse, 1500=stop, 2000=full forward
     // CH1 (steering): 1000=full left, 1500=center, 2000=full right
-    // CH4 (rotation): 1000=spin left, 1500=stop, 2000=spin right
 
     int16_t throttle = rcChannels[1];  // CH2
     int16_t steering = rcChannels[0];  // CH1
-    int16_t rotation = rcChannels[3];  // CH4
 
     // Apply speed limiter from CH6
     float speedLimit = mapFloat(rcChannels[5], RC_MIN, RC_MAX, 0.3, 1.0);
@@ -356,7 +435,6 @@ void executeRCMode() {
     // Apply deadzone
     int16_t throttleCmd = applyDeadzone(throttle, RC_CENTER, RC_DEADZONE);
     int16_t steeringCmd = applyDeadzone(steering, RC_CENTER, RC_DEADZONE);
-    int16_t rotationCmd = applyDeadzone(rotation, RC_CENTER, RC_DEADZONE);
 
     // Map to motor range (-MAX_MOTOR_PWM to +MAX_MOTOR_PWM)
     int16_t fwdSpeed = map(throttleCmd, -500, 500, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
@@ -365,40 +443,26 @@ void executeRCMode() {
     // Map steering to actuator command (-100 to 100)
     int16_t steerAngle = map(steeringCmd, -500, 500, -100, 100);
 
-    // Map rotation for spin-in-place
-    int16_t spinSpeed = map(rotationCmd, -500, 500, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
-    spinSpeed = constrain(spinSpeed * speedLimit, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
-
     // Calculate individual motor speeds
     int16_t targetFL, targetFR, targetRL, targetRR;
 
-    if (abs(spinSpeed) > 10) {
-        // Spin mode: left wheels forward, right wheels reverse (or vice versa)
-        targetFL = -spinSpeed;
-        targetFR = spinSpeed;
-        targetRL = -spinSpeed;
-        targetRR = spinSpeed;
-        // Steering actuators: point wheels for rotation
-        setSteeringForSpin();
-    } else {
-        // Normal driving: differential steering
-        // Mix throttle and steering
-        targetFL = fwdSpeed;
-        targetFR = fwdSpeed;
-        targetRL = fwdSpeed;
-        targetRR = fwdSpeed;
+    // Normal driving: differential steering
+    targetFL = fwdSpeed;
+    targetFR = fwdSpeed;
+    targetRL = fwdSpeed;
+    targetRR = fwdSpeed;
 
-        // Apply tank-style differential for turning while driving
-        // (This supplements the actuator steering for tighter turns)
-        int16_t diffMix = map(steeringCmd, -500, 500, -50, 50);
-        targetFL -= diffMix;
-        targetFR += diffMix;
-        targetRL -= diffMix;
-        targetRR += diffMix;
+    // Apply tank-style differential for turning while driving
+    // Positive diffMix = stick right = turn right:
+    //   Left wheels speed UP, Right wheels slow DOWN
+    int16_t diffMix = map(steeringCmd, -500, 500, -50, 50);
+    targetFL += diffMix;
+    targetFR -= diffMix;
+    targetRL += diffMix;
+    targetRR -= diffMix;
 
-        // Set steering actuators
-        setSteeringAngle(steerAngle);
-    }
+    // Set steering actuators
+    setSteeringAngle(steerAngle);
 
     // Apply soft start and drive motors
     driveMotorsSmooth(targetFL, targetFR, targetRL, targetRR);
@@ -416,8 +480,6 @@ void executeFollowMode() {
     }
 
     // RPi sends overall speed and steering angle
-    // Convert to individual motor speeds and actuator positions
-
     int16_t speed = rpiSpeed;
     int16_t steer = rpiSteer;  // -100 to 100
 
@@ -429,10 +491,10 @@ void executeFollowMode() {
 
     // Add differential speed for tighter following turns
     int16_t diffMix = map(steer, -100, 100, -40, 40);
-    targetFL -= diffMix;
-    targetFR += diffMix;
-    targetRL -= diffMix;
-    targetRR += diffMix;
+    targetFL += diffMix;
+    targetFR -= diffMix;
+    targetRL += diffMix;
+    targetRR -= diffMix;
 
     // Set steering actuators
     setSteeringAngle(steer);
@@ -497,21 +559,9 @@ void driveMotorsSmooth(int16_t targetFL, int16_t targetFR,
 /**
  * Set all 4 steering actuators to a target angle.
  * angle: -100 (full left) to +100 (full right)
- *
- * For basic steering (front wheels only), rear actuators stay centered.
- * Actuators are driven at full speed (ACTUATOR_PWM) in the desired direction
- * until they reach the target position.
- *
- * NOTE: Without position feedback, this is open-loop timed control.
- * The actuator PWM is set proportional to the error from center.
  */
 void setSteeringAngle(int16_t angle) {
     angle = constrain(angle, -100, 100);
-
-    // Front wheels: steer in the commanded direction
-    // Map angle to actuator speed/direction
-    // Positive angle = turn right = extend right actuator, retract left actuator
-    // (actual direction depends on your mechanical linkage — adjust signs as needed)
 
     int16_t frontActuSpeed;
 
@@ -524,29 +574,12 @@ void setSteeringAngle(int16_t angle) {
     }
 
     // Front actuators steer in the same direction
-    // (for parallel/same-direction steering, both push the same way)
     driveMotor(FL_ACTU_PWM, FL_ACTU_DIR, frontActuSpeed);
     driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, frontActuSpeed);
 
     // Rear actuators: keep centered (0) for normal driving
-    // Set to 0 to stop them / hold position
     driveMotor(RL_ACTU_PWM, RL_ACTU_DIR, 0);
     driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, 0);
-}
-
-/**
- * Set steering for spin-in-place mode.
- * Front wheels angle left, rear wheels angle right (or vice versa)
- * to create a rotation pivot at the center of the rover.
- */
-void setSteeringForSpin() {
-    // Front actuators: push one way
-    driveMotor(FL_ACTU_PWM, FL_ACTU_DIR, ACTUATOR_PWM);
-    driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, ACTUATOR_PWM);
-
-    // Rear actuators: push opposite way
-    driveMotor(RL_ACTU_PWM, RL_ACTU_DIR, -ACTUATOR_PWM);
-    driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, -ACTUATOR_PWM);
 }
 
 /**
@@ -606,14 +639,12 @@ void sendStatusToRPi() {
 
 /**
  * Apply deadzone around center value.
- * Returns value relative to center (e.g., -500 to +500 for RC).
  */
 int16_t applyDeadzone(int16_t value, int16_t center, int16_t deadzone) {
     int16_t offset = value - center;
     if (abs(offset) < deadzone) {
         return 0;
     }
-    // Scale remaining range to remove the deadzone gap
     if (offset > 0) {
         return map(offset, deadzone, 500, 0, 500);
     } else {
