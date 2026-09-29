@@ -92,8 +92,8 @@
 #define RC_MIN          1000
 #define RC_MAX          2000
 #define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_HIGH 1600  // CH5 > 1600 = Follow mode
-#define MODE_SWITCH_LOW  1400  // CH5 < 1400 = RC mode
+#define MODE_SWITCH_HIGH 1350  // Any switch position above DOWN (~1000) triggers Follow
+#define MODE_SWITCH_LOW  1250  // Switch DOWN (~1000) = RC mode
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
