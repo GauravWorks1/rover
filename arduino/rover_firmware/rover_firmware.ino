@@ -92,11 +92,12 @@
 #define RC_MIN          1000
 #define RC_MAX          2000
 #define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_THR 1500  // CH5 > 1500 = Follow mode
+#define MODE_SWITCH_HIGH 1600  // CH5 > 1600 = Follow mode
+#define MODE_SWITCH_LOW  1400  // CH5 < 1400 = RC mode
 
 // Safety
-#define SERIAL_WATCHDOG_MS  500   // Stop if no RPi command for this long
-#define RC_TIMEOUT_MS       500   // Stop if no RC signal for this long
+#define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
+#define RC_TIMEOUT_MS       800   // Stop if no RC signal for this long
 #define SOFT_START_STEP     5     // Max PWM change per loop iteration
 #define STATUS_SEND_INTERVAL_MS 100  // Send status to RPi every 100ms
 
@@ -395,25 +396,44 @@ void parseCommand() {
 // ============================================================================
 
 void updateMode() {
+    uint8_t targetMode = currentMode;
+
     // Priority 1: RC signal lost -> FAILSAFE
     if (!rcConnected) {
-        currentMode = MODE_FAILSAFE;
-        return;
+        targetMode = MODE_FAILSAFE;
+    } else {
+        // Priority 2: CH5 switch with hysteresis
+        if (rcChannels[4] > MODE_SWITCH_HIGH) {
+            // CH5 HIGH = Follow mode (if RPi watchdog is alive)
+            if (millis() - lastRpiCmdTime < SERIAL_WATCHDOG_MS) {
+                targetMode = MODE_FOLLOW;
+            } else {
+                targetMode = MODE_FAILSAFE;
+            }
+        } else if (rcChannels[4] < MODE_SWITCH_LOW) {
+            // CH5 LOW = RC mode
+            targetMode = MODE_RC;
+        }
+        // Between MODE_SWITCH_LOW and MODE_SWITCH_HIGH: keep targetMode as currentMode
     }
 
-    // Priority 2: CH5 switch determines RC vs Follow
-    if (rcChannels[4] > MODE_SWITCH_THR) {
-        // CH5 HIGH = Follow mode
-        // But only if RPi is connected (receiving commands)
-        if (millis() - lastRpiCmdTime < SERIAL_WATCHDOG_MS) {
-            currentMode = MODE_FOLLOW;
+    // Debounce filter: require 5 consecutive cycles (50ms) to switch mode
+    static uint8_t candidateMode = MODE_RC;
+    static uint8_t debounceCount = 0;
+
+    if (targetMode != currentMode) {
+        if (targetMode == candidateMode) {
+            debounceCount++;
+            if (debounceCount >= 5) {
+                currentMode = targetMode;
+                debounceCount = 0;
+            }
         } else {
-            // CH5 says Follow, but RPi isn't sending commands -> Failsafe
-            currentMode = MODE_FAILSAFE;
+            candidateMode = targetMode;
+            debounceCount = 1;
         }
     } else {
-        // CH5 LOW = RC mode
-        currentMode = MODE_RC;
+        debounceCount = 0;
     }
 }
 

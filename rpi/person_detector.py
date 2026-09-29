@@ -34,7 +34,11 @@ class PersonDetector:
         # Tracking state
         self.is_tracking = False
         self.frames_since_detect = 0
-        self.MAX_TRACK_FRAMES = 60  # Re-detect every 60 frames (~2 seconds) to prevent drift
+        self.MAX_TRACK_FRAMES = 180  # Keep tracking for ~7-8 seconds before re-anchoring
+
+        # Smooth position filters
+        self._smooth_cx = None
+        self._smooth_cy = None
 
         cv2.setNumThreads(4)
 
@@ -140,20 +144,20 @@ class PersonDetector:
                 }
                 
                 cv2.rectangle(annotated, (x, y), (x + box_w, y + box_h), (0, 255, 255), 2)
-                cv2.putText(annotated, "TRACKING (MOSSE)", (x, y - 10), 
+                cv2.putText(annotated, "TRACKING (MOSSE)", (x, max(15, y - 8)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
                 
                 self.frames_since_detect += 1
                 
-                # Force a re-detection occasionally to prevent the tracker from drifting
+                # Periodically re-anchor tracker to avoid slow drift
                 if self.frames_since_detect > self.MAX_TRACK_FRAMES:
                     self.is_tracking = False
             else:
-                # Tracker lost the target
+                # Tracker lost target
                 self.is_tracking = False
 
         # ==========================================
-        # MODE 2: DETECTING (Find the person initially)
+        # MODE 2: DETECTING (Find person initially)
         # ==========================================
         if not self.is_tracking:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -171,32 +175,57 @@ class PersonDetector:
             
             if best_box is not None:
                 x, y, box_w, box_h = best_box
+
+                # Expand face downwards to capture upper body/torso
+                pad_x = int(box_w * 0.25)
+                pad_top = int(box_h * 0.1)
+                pad_bot = int(box_h * 1.4)
                 
+                tx = max(0, x - pad_x)
+                ty = max(0, y - pad_top)
+                tw = min(w - tx, box_w + 2 * pad_x)
+                th = min(h - ty, box_h + pad_top + pad_bot)
+                track_box = (tx, ty, tw, th)
+
                 best_detection = {
-                    'cx': x + (box_w // 2),
-                    'cy': y + (box_h // 2),
-                    'w': box_w, 'h': box_h,
-                    'x1': x, 'y1': y,
-                    'x2': x + box_w, 'y2': y + box_h,
-                    'area': best_area,
-                    'area_ratio': float(best_area) / float(w * h),
+                    'cx': tx + (tw // 2),
+                    'cy': ty + (th // 2),
+                    'w': tw, 'h': th,
+                    'x1': tx, 'y1': ty,
+                    'x2': tx + tw, 'y2': ty + th,
+                    'area': tw * th,
+                    'area_ratio': float(tw * th) / float(w * h),
                     'confidence': 1.0
                 }
                 
                 # Draw red box to show a fresh detection
-                cv2.rectangle(annotated, (x, y), (x + box_w, y + box_h), (0, 0, 255), 2)
-                cv2.putText(annotated, "DETECTED (Haar)", (x, y - 10), 
+                cv2.rectangle(annotated, (tx, ty), (tx + tw, ty + th), (0, 0, 255), 2)
+                cv2.putText(annotated, "DETECTED (Haar)", (tx, max(15, ty - 8)), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                # Initialize the fast tracker with this bounding box
+                # Initialize fast tracker with expanded upper-body box
                 self.tracker = self._create_tracker()
-                self.tracker.init(frame, best_box)
+                self.tracker.init(frame, track_box)
                 self.is_tracking = True
                 self.frames_since_detect = 0
 
-        # Draw crosshair and FPS
+        # Smooth coordinates to eliminate jitter
         if best_detection:
+            raw_cx = best_detection['cx']
+            raw_cy = best_detection['cy']
+            if self._smooth_cx is None:
+                self._smooth_cx = raw_cx
+                self._smooth_cy = raw_cy
+            else:
+                self._smooth_cx = int(0.70 * self._smooth_cx + 0.30 * raw_cx)
+                self._smooth_cy = int(0.70 * self._smooth_cy + 0.30 * raw_cy)
+
+            best_detection['cx'] = self._smooth_cx
+            best_detection['cy'] = self._smooth_cy
             cv2.circle(annotated, (best_detection['cx'], best_detection['cy']), 5, (0, 0, 255), -1)
+        else:
+            self._smooth_cx = None
+            self._smooth_cy = None
             
         cv2.putText(annotated, f"Hybrid FPS: {self._fps:.1f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
