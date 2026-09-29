@@ -268,17 +268,21 @@ void loop() {
     updateMode();
 
     // 4. Execute mode-specific motor control
-    switch (currentMode) {
-        case MODE_RC:
-            executeRCMode();
-            break;
-        case MODE_FOLLOW:
-            executeFollowMode();
-            break;
-        case MODE_FAILSAFE:
-        default:
-            executeFailsafe();
-            break;
+    if (!rcConnected) {
+        // Transmitter turned off or signal lost: stop motors safely without changing mode
+        stopAllMotors();
+    } else {
+        switch (currentMode) {
+            case MODE_RC:
+                executeRCMode();
+                break;
+            case MODE_FOLLOW:
+                executeFollowMode();
+                break;
+            default:
+                stopAllMotors();
+                break;
+        }
     }
 
     // 5. Send status to RPi periodically
@@ -396,45 +400,14 @@ void parseCommand() {
 // ============================================================================
 
 void updateMode() {
-    uint8_t targetMode = currentMode;
-
-    // Priority 1: RC signal lost -> FAILSAFE
-    if (!rcConnected) {
-        targetMode = MODE_FAILSAFE;
-    } else {
-        // Priority 2: CH5 switch with hysteresis
-        if (rcChannels[4] > MODE_SWITCH_HIGH) {
-            // CH5 HIGH = Follow mode (if RPi watchdog is alive)
-            if (millis() - lastRpiCmdTime < SERIAL_WATCHDOG_MS) {
-                targetMode = MODE_FOLLOW;
-            } else {
-                targetMode = MODE_FAILSAFE;
-            }
-        } else if (rcChannels[4] < MODE_SWITCH_LOW) {
-            // CH5 LOW = RC mode
-            targetMode = MODE_RC;
-        }
-        // Between MODE_SWITCH_LOW and MODE_SWITCH_HIGH: keep targetMode as currentMode
+    // Mode switching is 100% MANUAL — strictly controlled by FlySky CH5 switch!
+    // No software timeouts, no watchdog overrides, no automatic flipping.
+    if (rcChannels[4] > MODE_SWITCH_HIGH) {
+        currentMode = MODE_FOLLOW;
+    } else if (rcChannels[4] < MODE_SWITCH_LOW) {
+        currentMode = MODE_RC;
     }
-
-    // Debounce filter: require 5 consecutive cycles (50ms) to switch mode
-    static uint8_t candidateMode = MODE_RC;
-    static uint8_t debounceCount = 0;
-
-    if (targetMode != currentMode) {
-        if (targetMode == candidateMode) {
-            debounceCount++;
-            if (debounceCount >= 5) {
-                currentMode = targetMode;
-                debounceCount = 0;
-            }
-        } else {
-            candidateMode = targetMode;
-            debounceCount = 1;
-        }
-    } else {
-        debounceCount = 0;
-    }
+    // In deadband (1400-1600): retains current mode, zero jitter!
 }
 
 // ============================================================================
