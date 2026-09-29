@@ -91,9 +91,8 @@
 #define RC_CENTER       1500
 #define RC_MIN          1000
 #define RC_MAX          2000
-#define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_HIGH 1650  // Switch UP (~1900-2000) = Follow mode
-#define MODE_SWITCH_LOW  1350  // Switch DOWN (~1000-1100) = RC mode
+#define MODE_SWITCH_HIGH 1650  // SwA UP   (~1900-2000) = RC mode
+#define MODE_SWITCH_LOW  1350  // SwA DOWN (~1000-1100) = Follow mode
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
@@ -411,22 +410,23 @@ void parseCommand() {
 
 void updateMode() {
     // Mode switching is 100% MANUAL with a 10-cycle debounce filter (100ms)
-    // Eliminates any transient pulse noise or jitter from the receiver!
+    // SwA DOWN (~1084) = FOLLOW MODE
+    // SwA UP   (~1950) = RC MODE
     static uint8_t followCount = 0;
     static uint8_t rcCount = 0;
 
-    if (rcChannels[4] > MODE_SWITCH_HIGH) {
+    if (rcChannels[4] < MODE_SWITCH_LOW) {
+        // SwA DOWN -> FOLLOW MODE
         followCount++;
         rcCount = 0;
-        // Must stay solidly HIGH for 10 consecutive cycles (~100ms)
         if (followCount >= 10) {
             currentMode = MODE_FOLLOW;
             followCount = 10;  // clamp
         }
-    } else if (rcChannels[4] < MODE_SWITCH_LOW) {
+    } else if (rcChannels[4] > MODE_SWITCH_HIGH) {
+        // SwA UP -> RC MODE
         rcCount++;
         followCount = 0;
-        // Must stay solidly LOW for 10 consecutive cycles (~100ms)
         if (rcCount >= 10) {
             currentMode = MODE_RC;
             rcCount = 10;  // clamp

@@ -83,9 +83,9 @@ class RoverController:
         signal.signal(signal.SIGTERM, self._signal_handler)
 
         logger.info("All systems initialized. Starting main loop...")
-        logger.info("Mode is controlled by FlySky CH5 switch")
-        logger.info("  CH5 LOW  = RC Mode (FlySky controls)")
-        logger.info("  CH5 HIGH = Follow-Me Mode (camera follows person)")
+        logger.info("Mode is controlled by FlySky SwA (CH5) switch:")
+        logger.info("  SwA DOWN = Follow-Me Mode (camera follows person)")
+        logger.info("  SwA UP   = RC Mode (FlySky stick driving)")
         logger.info("")
 
         self._running = True
