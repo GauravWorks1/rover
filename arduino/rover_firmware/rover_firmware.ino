@@ -62,11 +62,11 @@
 //  These MUST be interrupt-capable pins on the Mega!
 //  Mega interrupt pins: 2, 3, 18, 19, 20, 21
 // -------------------------------------------------------
-#define RC_PIN_CH1     2    // CH1 Steering   (INT0)
-#define RC_PIN_CH2     3    // CH2 Throttle   (INT1)
-#define RC_PIN_CH3     18   // CH3 Aux        (INT5)
-#define RC_PIN_CH5     19   // CH5 Mode switch(INT4)
-#define RC_PIN_CH6     20   // CH6 Speed limit(INT3)
+#define RC_PIN_CH1     2    // CH1 Steering    (INT0)
+#define RC_PIN_CH2     3    // CH2 Throttle    (INT1)
+#define RC_PIN_CH3     18   // CH3 Aux         (INT5)
+#define RC_PIN_CH5     19   // CH5 SwB Mode Sw (INT4)
+#define RC_PIN_CH6     20   // CH6 SwB / Aux   (INT3)
 
 // ============================================================================
 //  CONSTANTS
@@ -92,8 +92,8 @@
 #define RC_MIN          1000
 #define RC_MAX          2000
 #define RC_DEADZONE     50    // ±50 around center = deadzone
-#define MODE_SWITCH_HIGH 1450  // SwA UP   (1500 to 2000) = RC mode
-#define MODE_SWITCH_LOW  1350  // SwA DOWN (~1000-1100)   = Follow mode
+#define MODE_SWITCH_HIGH 1450  // SwB UP   (1500 to 2000) = RC mode
+#define MODE_SWITCH_LOW  1350  // SwB DOWN (~1000-1100)   = Follow mode
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
@@ -114,7 +114,7 @@ volatile uint16_t rc_ch1_raw = 1500;
 volatile uint16_t rc_ch2_raw = 1500;
 volatile uint16_t rc_ch3_raw = 1500;
 volatile uint16_t rc_ch5_raw = 1900;
-volatile uint16_t rc_ch6_raw = 1500;
+volatile uint16_t rc_ch6_raw = 1900;
 
 volatile unsigned long rc_ch1_rise = 0;
 volatile unsigned long rc_ch2_rise = 0;
@@ -123,6 +123,8 @@ volatile unsigned long rc_ch5_rise = 0;
 volatile unsigned long rc_ch6_rise = 0;
 
 volatile unsigned long rc_last_update = 0;  // Timestamp of last valid pulse
+volatile unsigned long rc_ch5_last_ms = 0;  // Timestamp of last valid CH5 pulse
+volatile unsigned long rc_ch6_last_ms = 0;  // Timestamp of last valid CH6 pulse
 
 // ISR for each channel: measure pulse width (HIGH time)
 void isr_ch1() {
@@ -175,7 +177,9 @@ void isr_ch5() {
             uint16_t pw = (uint16_t)(micros() - rc_ch5_rise);
             if (pw >= 900 && pw <= 2100) {
                 rc_ch5_raw = pw;
-                rc_last_update = millis();
+                unsigned long nowMs = millis();
+                rc_last_update = nowMs;
+                rc_ch5_last_ms = nowMs;
             }
         }
     }
@@ -189,7 +193,9 @@ void isr_ch6() {
             uint16_t pw = (uint16_t)(micros() - rc_ch6_rise);
             if (pw >= 900 && pw <= 2100) {
                 rc_ch6_raw = pw;
-                rc_last_update = millis();
+                unsigned long nowMs = millis();
+                rc_last_update = nowMs;
+                rc_ch6_last_ms = nowMs;
             }
         }
     }
@@ -306,19 +312,50 @@ void loop() {
 // ============================================================================
 
 void readRC() {
+    static uint8_t activeModePin = 5;  // 5 = Pin 19 (CH5), 6 = Pin 20 (CH6)
+    static int16_t prevCh5 = -1;
+    static int16_t prevCh6 = -1;
+
     // Safely copy volatile ISR values with interrupts disabled
     noInterrupts();
-    rcChannels[0] = rc_ch1_raw;  // CH1 Steer
-    rcChannels[1] = rc_ch2_raw;  // CH2 Throttle
-    rcChannels[2] = rc_ch3_raw;  // CH3 Aux
-    rcChannels[3] = 1500;        // CH4 not wired (no pin left), default center
-    rcChannels[4] = rc_ch5_raw;  // CH5 Mode
-    rcChannels[5] = rc_ch6_raw;  // CH6 Speed limit
+    int16_t ch1 = rc_ch1_raw;
+    int16_t ch2 = rc_ch2_raw;
+    int16_t ch3 = rc_ch3_raw;
+    int16_t ch5 = rc_ch5_raw;
+    int16_t ch6 = rc_ch6_raw;
     unsigned long lastUpdate = rc_last_update;
+    unsigned long ch5Last = rc_ch5_last_ms;
+    unsigned long ch6Last = rc_ch6_last_ms;
     interrupts();
 
+    unsigned long nowMs = millis();
+    bool ch5Active = (ch5Last > 0) && (nowMs - ch5Last < RC_TIMEOUT_MS);
+    bool ch6Active = (ch6Last > 0) && (nowMs - ch6Last < RC_TIMEOUT_MS);
+
+    // Auto-detect SwB switch on either Pin 19 (CH5) or Pin 20 (CH6)
+    if (ch6Active && !ch5Active) {
+        activeModePin = 6;
+    } else if (ch5Active && !ch6Active) {
+        activeModePin = 5;
+    } else if (ch5Active && ch6Active) {
+        if (prevCh6 >= 0 && abs(ch6 - prevCh6) > 250) {
+            activeModePin = 6;
+        } else if (prevCh5 >= 0 && abs(ch5 - prevCh5) > 250) {
+            activeModePin = 5;
+        }
+    }
+    if (ch5Active) prevCh5 = ch5;
+    if (ch6Active) prevCh6 = ch6;
+
+    rcChannels[0] = ch1;  // CH1 Steer (Pin 2)
+    rcChannels[1] = ch2;  // CH2 Throttle (Pin 3)
+    rcChannels[2] = ch3;  // CH3 Aux (Pin 18)
+    rcChannels[3] = 1500; // CH4 default center
+    rcChannels[4] = (activeModePin == 6) ? ch6 : ch5;  // SwB Mode Switch
+    rcChannels[5] = ch6;
+
     // Check for RC signal timeout
-    if (millis() - lastUpdate < RC_TIMEOUT_MS) {
+    if (lastUpdate > 0 && (nowMs - lastUpdate < RC_TIMEOUT_MS)) {
         rcConnected = true;
     } else {
         rcConnected = false;
@@ -406,14 +443,14 @@ void parseCommand() {
 // ============================================================================
 
 void updateMode() {
-    // Mode switching is 100% MANUAL with a 10-cycle debounce filter (100ms)
-    // SwA DOWN (~1084) = FOLLOW MODE
-    // SwA UP   (~1950) = RC MODE
+    // Mode switching via SwB with a 5-cycle debounce filter (50ms)
+    // SwB DOWN (~1000) = FOLLOW MODE
+    // SwB UP   (~2000) = RC MODE
     static uint8_t followCount = 0;
     static uint8_t rcCount = 0;
 
     if (rcChannels[4] < MODE_SWITCH_LOW) {
-        // SwA DOWN -> FOLLOW MODE
+        // SwB DOWN -> FOLLOW MODE
         followCount++;
         rcCount = 0;
         if (followCount >= 5) {
@@ -421,7 +458,7 @@ void updateMode() {
             followCount = 5;  // clamp
         }
     } else if (rcChannels[4] > MODE_SWITCH_HIGH) {
-        // SwA UP -> RC MODE
+        // SwB UP -> RC MODE
         rcCount++;
         followCount = 0;
         if (rcCount >= 5) {
@@ -447,16 +484,13 @@ void executeRCMode() {
     int16_t throttle = rcChannels[1];  // CH2
     int16_t steering = rcChannels[0];  // CH1
 
-    // Apply speed limiter from CH6
-    float speedLimit = mapFloat(rcChannels[5], RC_MIN, RC_MAX, 0.3, 1.0);
-
     // Apply deadzone
     int16_t throttleCmd = applyDeadzone(throttle, RC_CENTER, RC_DEADZONE);
     int16_t steeringCmd = applyDeadzone(steering, RC_CENTER, RC_DEADZONE);
 
     // Map to motor range (-MAX_MOTOR_PWM to +MAX_MOTOR_PWM)
     int16_t fwdSpeed = map(throttleCmd, -500, 500, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
-    fwdSpeed = constrain(fwdSpeed * speedLimit, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
+    fwdSpeed = constrain(fwdSpeed, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
 
     // Map steering to actuator command (-100 to 100)
     int16_t steerAngle = map(steeringCmd, -500, 500, -100, 100);

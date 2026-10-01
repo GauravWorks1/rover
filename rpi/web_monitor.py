@@ -264,7 +264,7 @@ DASHBOARD_HTML = """
                     <span class="stat-value" id="ch3">1500</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">CH5 Mode</span>
+                    <span class="stat-label">SwB Mode</span>
                     <span class="stat-value" id="ch5">1000</span>
                 </div>
             </div>
