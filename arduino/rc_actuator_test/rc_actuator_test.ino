@@ -12,9 +12,9 @@
  *    - Pin 26 (DIR Direction)
  *
  *  BEHAVIOR:
- *    - Push Stick RIGHT (> 1550 us) -> Actuator EXTENDS  (DIR HIGH, PWM 200)
- *    - Push Stick LEFT  (< 1450 us) -> Actuator RETRACTS (DIR LOW,  PWM 200)
- *    - Stick CENTERED   (1450-1550) -> Actuator STOPS    (PWM 0)
+ *    - Push Stick RIGHT / UP (> 1560 us) -> Actuator EXTENDS  (DIR HIGH, PWM 200)
+ *    - Push Stick LEFT / DOWN (< 1440 us) -> Actuator RETRACTS (DIR LOW,  PWM 200)
+ *    - Stick CENTERED         (1440-1560) -> Actuator STOPS    (PWM 0)
  *
  *  Prints real-time pulse width & action to Serial Monitor at 115200 baud.
  * ============================================================================
