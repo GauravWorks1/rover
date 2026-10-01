@@ -162,14 +162,16 @@ class FollowController:
         self._last_detection_time = time.time()
 
         # --- Steering: horizontal centering ---
-        # Error = person center X - frame center X
-        # Positive error = person is to the RIGHT
-        # We normalize by half the frame width so error is in range [-1, 1]
-        steer_error = (detection['cx'] - FRAME_CENTER_X) / (CAMERA_WIDTH / 2.0)
+        # Offset in pixels from center (-160 to +160)
+        # Positive offset = person is to the RIGHT
+        offset_px = detection['cx'] - FRAME_CENTER_X
 
-        # Apply dead zone
-        if abs(steer_error * CAMERA_WIDTH / 2.0) < STEER_DEADZONE_PX:
+        # Apply pixel dead zone around center
+        if abs(offset_px) < STEER_DEADZONE_PX:
             steer_error = 0.0
+        else:
+            # Normalize to percentage [-100.0, +100.0]
+            steer_error = (offset_px / (CAMERA_WIDTH / 2.0)) * 100.0
 
         steer_target = self.steer_pid.compute(steer_error)
 

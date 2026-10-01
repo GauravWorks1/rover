@@ -51,13 +51,13 @@ FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 120
 # when the rover is at the ideal following distance
 TARGET_AREA_RATIO = 0.12   # ~12% of frame = good following distance
 
-# PID gains for STEERING (horizontal centering)
-KP_STEER = 0.40
-KI_STEER = 0.005
-KD_STEER = 0.15
+# PID gains for STEERING (horizontal centering, error is -100 to +100 %)
+KP_STEER = 0.80
+KI_STEER = 0.01
+KD_STEER = 0.10
 
 # PID gains for SPEED (distance keeping via bounding box area)
-KP_SPEED = 200.0       # scaled to convert area-ratio error to speed %
+KP_SPEED = 800.0       # scaled to convert area-ratio error to speed PWM
 KI_SPEED = 5.0
 KD_SPEED = 30.0
 
@@ -70,8 +70,8 @@ MAX_SPEED           = 200    # max PWM value (0-255), matches Arduino MAX_MOTOR_
 MAX_STEER           = 100    # max steering angle (-100 to 100)
 
 # Smoothing: max change per cycle (prevents jerky movements)
-SPEED_RAMP_RATE     = 10     # max speed change per control cycle
-STEER_RAMP_RATE     = 8      # max steer change per control cycle
+SPEED_RAMP_RATE     = 20     # max speed change per control cycle
+STEER_RAMP_RATE     = 25     # fast steering response for linear actuators
 
 # ==============================================================================
 # Timeouts & Safety
