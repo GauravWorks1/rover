@@ -49,13 +49,13 @@
 
 // Steering Actuators (SmartElex 15D drivers #3 and #4 — 12V)
 #define FL_ACTU_PWM    8
-#define FL_ACTU_DIR    26
+#define FL_ACTU_DIR    13   // Verified Working with LED!
 #define FR_ACTU_PWM    9
-#define FR_ACTU_DIR    27
+#define FR_ACTU_DIR    12
 #define RL_ACTU_PWM    10
-#define RL_ACTU_DIR    28
+#define RL_ACTU_DIR    14
 #define RR_ACTU_PWM    11
-#define RR_ACTU_DIR    29
+#define RR_ACTU_DIR    15
 
 // -------------------------------------------------------
 //  RC RECEIVER PINS (FS-iA6 PWM outputs)

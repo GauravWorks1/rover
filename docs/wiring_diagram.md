@@ -54,14 +54,14 @@
 
 | Arduino Pin | Type | Function           | Connected To              |
 |-------------|------|--------------------|---------------------------|
-| D8          | PWM  | FL Actuator Speed  | Driver #3, CH-A PWM Input |
-| D26         | DIG  | FL Actuator Dir    | Driver #3, CH-A DIR Input |
-| D9          | PWM  | FR Actuator Speed  | Driver #3, CH-B PWM Input |
-| D27         | DIG  | FR Actuator Dir    | Driver #3, CH-B DIR Input |
-| D10         | PWM  | RL Actuator Speed  | Driver #4, CH-A PWM Input |
-| D28         | DIG  | RL Actuator Dir    | Driver #4, CH-A DIR Input |
-| D11         | PWM  | RR Actuator Speed  | Driver #4, CH-B PWM Input |
-| D29         | DIG  | RR Actuator Dir    | Driver #4, CH-B DIR Input |
+| D8          | PWM  | FL Actuator Speed  | Driver #3, CH-A PWM Input (PWM1) |
+| D13         | DIG  | FL Actuator Dir    | Driver #3, CH-A DIR Input (DIR1 - Onboard LED) |
+| D9          | PWM  | FR Actuator Speed  | Driver #3, CH-B PWM Input (PWM2) |
+| D12         | DIG  | FR Actuator Dir    | Driver #3, CH-B DIR Input (DIR2) |
+| D10         | PWM  | RL Actuator Speed  | Driver #4, CH-A PWM Input (PWM1) |
+| D14         | DIG  | RL Actuator Dir    | Driver #4, CH-A DIR Input (DIR1) |
+| D11         | PWM  | RR Actuator Speed  | Driver #4, CH-B PWM Input (PWM2) |
+| D15         | DIG  | RR Actuator Dir    | Driver #4, CH-B DIR Input (DIR2) |
 
 ### RC Receiver (FS-iA6) → Arduino Mega (INTERRUPT PINS)
 
