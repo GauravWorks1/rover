@@ -278,21 +278,17 @@ void loop() {
     updateMode();
 
     // 4. Execute mode-specific motor control
-    if (!rcConnected) {
-        // Transmitter turned off or signal lost: stop motors safely without changing mode
-        stopAllMotors();
-    } else {
-        switch (currentMode) {
-            case MODE_RC:
-                executeRCMode();
-                break;
-            case MODE_FOLLOW:
-                executeFollowMode();
-                break;
-            default:
-                stopAllMotors();
-                break;
+    if (currentMode == MODE_FOLLOW) {
+        // Follow Mode: executed via RPi vision commands (guarded by SERIAL_WATCHDOG_MS)
+        executeFollowMode();
+    } else if (currentMode == MODE_RC) {
+        if (rcConnected) {
+            executeRCMode();
+        } else {
+            stopAllMotors();
         }
+    } else {
+        stopAllMotors();
     }
 
     // 5. Send status to RPi periodically
@@ -585,21 +581,24 @@ void driveMotorsSmooth(int16_t targetFL, int16_t targetFR,
 void setSteeringAngle(int16_t angle) {
     angle = constrain(angle, -100, 100);
 
-    int16_t frontActuSpeed;
+    int16_t frontActuSpeed = 0;
 
-    if (abs(angle) < 5) {
-        // Near center: stop actuators (hold position)
+    if (abs(angle) < 8) {
+        // Near center: stop actuators (hold straight)
         frontActuSpeed = 0;
+    } else if (angle > 0) {
+        // Turn RIGHT -> Full torque EXTEND (DIR = HIGH, PWM = 200)
+        frontActuSpeed = ACTUATOR_PWM;
     } else {
-        // Drive actuators proportional to steering angle
-        frontActuSpeed = map(angle, -100, 100, -ACTUATOR_PWM, ACTUATOR_PWM);
+        // Turn LEFT -> Full torque RETRACT (DIR = LOW, PWM = 200)
+        frontActuSpeed = -ACTUATOR_PWM;
     }
 
-    // Front actuators steer in the same direction
+    // Front actuators steer in the requested direction
     driveMotor(FL_ACTU_PWM, FL_ACTU_DIR, frontActuSpeed);
     driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, frontActuSpeed);
 
-    // Rear actuators: keep centered (0) for normal driving
+    // Rear actuators: keep stopped for normal driving
     driveMotor(RL_ACTU_PWM, RL_ACTU_DIR, 0);
     driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, 0);
 }
