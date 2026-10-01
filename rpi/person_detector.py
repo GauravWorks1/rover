@@ -12,7 +12,7 @@ import threading
 import logging
 import os
 
-from config import CAMERA_INDEX, CAMERA_FPS
+from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +68,8 @@ class PersonDetector:
 
         self.cap = cv2.VideoCapture(CAMERA_INDEX)
         
-        # Low resolution for massive speed boost
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
         if not self.cap.isOpened():
@@ -161,7 +160,7 @@ class PersonDetector:
         # ==========================================
         if not self.is_tracking:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(30, 30))
+            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(50, 50))
             
             best_area = 0
             best_box = None

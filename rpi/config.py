@@ -6,7 +6,7 @@ All tunable parameters in one place.
 # ==============================================================================
 # Serial Communication (RPi <-> Arduino)
 # ==============================================================================
-SERIAL_PORT = '/dev/ttyACM0'      # Arduino Mega USB serial
+SERIAL_PORT = '/dev/ttyUSB0'      # Arduino Mega USB serial
 SERIAL_BAUD = 115200
 SERIAL_TIMEOUT = 0.05             # 50ms read timeout
 
@@ -35,8 +35,8 @@ MODE_FAILSAFE   = 2
 # Camera (MUST match person_detector.py capture resolution!)
 # ==============================================================================
 CAMERA_INDEX    = 0               # USB webcam index
-CAMERA_WIDTH    = 320             # Low resolution for speed on RPi
-CAMERA_HEIGHT   = 240
+CAMERA_WIDTH    = 640             # 640x480 resolution
+CAMERA_HEIGHT   = 480
 CAMERA_FPS      = 30
 
 # ==============================================================================
@@ -44,8 +44,8 @@ CAMERA_FPS      = 30
 # ==============================================================================
 
 # Frame center reference (derived from actual camera resolution)
-FRAME_CENTER_X  = CAMERA_WIDTH  // 2   # 160
-FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 120
+FRAME_CENTER_X  = CAMERA_WIDTH  // 2   # 320
+FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 240
 
 # Target: person bounding box should occupy this fraction of the frame
 # when the rover is at the ideal following distance
@@ -62,7 +62,7 @@ KI_SPEED = 5.0
 KD_SPEED = 30.0
 
 # Dead zones (ignore small errors to prevent jitter)
-STEER_DEADZONE_PX   = 15     # pixels from center X (halved for 320px width)
+STEER_DEADZONE_PX   = 30     # pixels from center X (for 640px width)
 AREA_DEADZONE_RATIO = 0.015  # area ratio tolerance
 
 # Output limits
