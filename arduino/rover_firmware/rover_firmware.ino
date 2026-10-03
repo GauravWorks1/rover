@@ -39,13 +39,13 @@
 // Drive Motors (SmartElex 15D drivers #1 and #2 — 24V)
 // Each motor: PWM pin (speed) + DIR pin (direction)
 #define FL_MOTOR_PWM   4
-#define FL_MOTOR_DIR   22
+#define FL_MOTOR_DIR   16   // Moved from 22 to reliable single-row header (TX2)
 #define FR_MOTOR_PWM   5
-#define FR_MOTOR_DIR   23
+#define FR_MOTOR_DIR   17   // Moved from 23 to reliable single-row header (RX2)
 #define RL_MOTOR_PWM   6
-#define RL_MOTOR_DIR   24
+#define RL_MOTOR_DIR   A0   // Moved from 24 to reliable Analog header (A0)
 #define RR_MOTOR_PWM   7
-#define RR_MOTOR_DIR   25
+#define RR_MOTOR_DIR   A1   // Moved from 25 to reliable Analog header (A1)
 
 // Steering Actuators (SmartElex 15D drivers #3 and #4 — 12V)
 #define FL_ACTU_PWM    8
