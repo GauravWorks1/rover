@@ -1,0 +1,25 @@
+[Unit]
+Description=Rover Follow-Me Controller
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/rover/rpi
+ExecStart=/usr/bin/python3 /home/pi/rover/rpi/main.py --port /dev/ttyACM0 --web-port 5123 --log-file /home/pi/rover/logs/rover.log
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Wait for Arduino to be ready
+ExecStartPre=/bin/sleep 5
+
+# Environment
+Environment=PYTHONUNBUFFERED=1
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=multi-user.target
