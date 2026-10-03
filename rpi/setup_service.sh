@@ -9,7 +9,7 @@ set -e
 SERVICE_NAME="rover"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 SOURCE_SERVICE="$(dirname "$0")/rover.service"
-LOG_DIR="/home/pi/rover/logs"
+LOG_DIR="/home/user/rover/logs"
 
 usage() {
     echo ""
@@ -38,7 +38,7 @@ install_service() {
 
     # Create log directory
     mkdir -p "$LOG_DIR"
-    chown pi:pi "$LOG_DIR"
+    chown user:user "$LOG_DIR"
     echo "✅ Created log directory: $LOG_DIR"
 
     # Copy service file
