@@ -598,6 +598,16 @@ void executeFollowMode() {
     int16_t speed = rpiSpeed;
     int16_t steer = rpiSteer;  // -100 to 100
 
+    // SAFETY #1 & #2:
+    // - Never reverse blindly in Follow Mode (clamp speed >= 0)
+    // - When RPi commands speed <= 0 (person reached target distance or Too-Close Emergency Stop),
+    //   immediately hard-brake all motors to 0 instead of slowly ramping down!
+    if (speed <= 0) {
+        stopAllMotors();
+        setSteeringAngle(steer);
+        return;
+    }
+
     // Calculate motor speeds with differential for steering assist
     int16_t targetFL = speed;
     int16_t targetFR = speed;
@@ -606,10 +616,10 @@ void executeFollowMode() {
 
     // Add differential speed for tighter following turns
     int16_t diffMix = map(steer, -100, 100, -40, 40);
-    targetFL += diffMix;
-    targetFR -= diffMix;
-    targetRL += diffMix;
-    targetRR -= diffMix;
+    targetFL = max((int16_t)0, (int16_t)(targetFL + diffMix));
+    targetFR = max((int16_t)0, (int16_t)(targetFR - diffMix));
+    targetRL = max((int16_t)0, (int16_t)(targetRL + diffMix));
+    targetRR = max((int16_t)0, (int16_t)(targetRR - diffMix));
 
     // Set steering actuators
     setSteeringAngle(steer);

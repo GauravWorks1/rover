@@ -52,6 +52,8 @@ FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 240
 # Target: person bounding box should occupy this fraction of the frame
 # when the rover is at the ideal following distance
 TARGET_AREA_RATIO = 0.12   # ~12% of frame = good following distance
+TOO_CLOSE_STOP_RATIO = 0.25 # Safety #1: Instant hard brake if person exceeds 25% of frame
+ALLOW_FOLLOW_REVERSE = False # Safety #2: Never auto-reverse blindly in Follow Mode
 
 # PID gains for STEERING (horizontal centering, error is -100 to +100 %)
 KP_STEER = 0.80

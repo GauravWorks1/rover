@@ -14,6 +14,8 @@ import logging
 from config import (
     FRAME_CENTER_X,
     TARGET_AREA_RATIO,
+    TOO_CLOSE_STOP_RATIO,
+    ALLOW_FOLLOW_REVERSE,
     KP_STEER, KI_STEER, KD_STEER,
     KP_SPEED, KI_SPEED, KD_SPEED,
     STEER_DEADZONE_PX, AREA_DEADZONE_RATIO,
@@ -104,21 +106,22 @@ class FollowController:
             -MAX_STEER, MAX_STEER
         )
 
-        # Speed PID: error is (current_area_ratio - target_area_ratio)
-        # Positive error (person too close) -> negative speed (slow down / reverse)
-        # Negative error (person too far) -> positive speed (speed up)
+        # Speed PID: error is (target_area_ratio - current_area_ratio)
+        # Safety #2: If ALLOW_FOLLOW_REVERSE is False, minimum speed is 0 (never reverse blindly)
+        min_speed = -MAX_SPEED if ALLOW_FOLLOW_REVERSE else 0
         self.speed_pid = PIDController(
             KP_SPEED, KI_SPEED, KD_SPEED,
-            -MAX_SPEED, MAX_SPEED
+            min_speed, MAX_SPEED
         )
 
         # Smoothed outputs (for ramp limiting)
         self._current_speed = 0.0
         self._current_steer = 0.0
 
-        # Target lost tracking
+        # Target lost & safety tracking
         self._last_detection_time = None
         self._target_acquired = False
+        self._too_close_active = False
 
     def compute(self, detection, detection_age):
         """
@@ -129,9 +132,9 @@ class FollowController:
             detection_age: seconds since detection was made
 
         Returns:
-            (speed, steer): both in range [-100, 100] approx
-            speed: positive = forward, negative = reverse
-            steer: positive = turn right, negative = turn left
+            (speed, steer):
+            speed: 0 to MAX_SPEED (forward only when ALLOW_FOLLOW_REVERSE=False)
+            steer: -100 to 100 (positive = turn right, negative = turn left)
         """
         # =====================================================================
         # Case 1: No detection or stale detection
@@ -140,10 +143,13 @@ class FollowController:
             if self._target_acquired:
                 logger.info("Target lost — stopping")
                 self._target_acquired = False
+            self._too_close_active = False
 
             # Gradually slow down to stop
             self._current_speed = self._ramp(self._current_speed, 0, SPEED_RAMP_RATE)
             self._current_steer = self._ramp(self._current_steer, 0, STEER_RAMP_RATE)
+            if not ALLOW_FOLLOW_REVERSE and self._current_speed < 0:
+                self._current_speed = 0.0
 
             # Reset PIDs when target is lost
             if abs(self._current_speed) < 1 and abs(self._current_steer) < 1:
@@ -160,9 +166,31 @@ class FollowController:
             self._target_acquired = True
 
         self._last_detection_time = time.time()
+        current_area = detection['area_ratio']
+
+        # =====================================================================
+        # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake)
+        # If person is closer than TOO_CLOSE_STOP_RATIO (or already within target
+        # distance), immediately cut forward speed to 0 without slow ramping!
+        # =====================================================================
+        if current_area >= TOO_CLOSE_STOP_RATIO:
+            if not self._too_close_active:
+                logger.warning(
+                    f"⚠️ SAFETY STOP: Person too close ({current_area:.1%} >= {TOO_CLOSE_STOP_RATIO:.0%}) — Instant Brake!"
+                )
+                self._too_close_active = True
+            self.speed_pid.reset()
+            self.steer_pid.reset()
+            self._current_speed = 0.0
+            self._current_steer = 0.0
+            return 0, 0
+        else:
+            if self._too_close_active:
+                logger.info("✅ Person at safe distance — resuming Follow Mode")
+                self._too_close_active = False
 
         # --- Steering: horizontal centering ---
-        # Offset in pixels from center (-160 to +160)
+        # Offset in pixels from center (-320 to +320)
         # Positive offset = person is to the RIGHT
         offset_px = detection['cx'] - FRAME_CENTER_X
 
@@ -178,22 +206,33 @@ class FollowController:
         # --- Speed: distance control via bounding box area ---
         # Error = target_area_ratio - current_area_ratio
         # Positive error = person too far away -> move forward
-        # Negative error = person too close -> slow down / reverse
-        area_error = TARGET_AREA_RATIO - detection['area_ratio']
+        # Negative error = person closer than target -> stop (Safety #2: no reverse)
+        area_error = TARGET_AREA_RATIO - current_area
 
         # Apply dead zone
         if abs(area_error) < AREA_DEADZONE_RATIO:
             area_error = 0.0
 
-        speed_target = self.speed_pid.compute(area_error)
+        # If person is at or closer than target distance and reverse is disabled,
+        # stop immediately instead of slowly ramping down into the person
+        if not ALLOW_FOLLOW_REVERSE and area_error <= 0.0:
+            self.speed_pid.reset()
+            speed_target = 0.0
+            self._current_speed = 0.0
+        else:
+            speed_target = self.speed_pid.compute(area_error)
+            # Reduce speed when turning sharply (safety)
+            turn_factor = 1.0 - 0.5 * abs(steer_target / MAX_STEER)
+            speed_target *= turn_factor
 
-        # Reduce speed when turning sharply (safety)
-        turn_factor = 1.0 - 0.5 * abs(steer_target / MAX_STEER)
-        speed_target *= turn_factor
+            # Apply ramp limiting for smooth forward acceleration
+            self._current_speed = self._ramp(self._current_speed, speed_target,
+                                              SPEED_RAMP_RATE)
 
-        # --- Apply ramp limiting (smooth acceleration) ---
-        self._current_speed = self._ramp(self._current_speed, speed_target,
-                                          SPEED_RAMP_RATE)
+        # Safety #2: Final hard clamp so Follow Mode never sends negative (reverse) speed
+        if not ALLOW_FOLLOW_REVERSE and self._current_speed < 0:
+            self._current_speed = 0.0
+
         self._current_steer = self._ramp(self._current_steer, steer_target,
                                           STEER_RAMP_RATE)
 
