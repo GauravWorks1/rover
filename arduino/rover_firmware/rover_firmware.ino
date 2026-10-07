@@ -602,10 +602,12 @@ void driveMotorsSmooth(int16_t targetFL, int16_t targetFR,
     currentMotorRR = rampValue(currentMotorRR, targetRR, SOFT_START_STEP);
 
     // Apply to hardware
-    driveMotor(FL_MOTOR_PWM, FL_MOTOR_DIR, currentMotorFL);
-    driveMotor(FR_MOTOR_PWM, FR_MOTOR_DIR, currentMotorFR);
-    driveMotor(RL_MOTOR_PWM, RL_MOTOR_DIR, currentMotorRL);
-    driveMotor(RR_MOTOR_PWM, RR_MOTOR_DIR, currentMotorRR);
+    // NOTE: Right-side motors (FR, RR) are mounted mirrored to Left-side (FL, RL),
+    // so we invert (-currentMotorFR, -currentMotorRR) so all 4 wheels roll the same way!
+    driveMotor(FL_MOTOR_PWM, FL_MOTOR_DIR,  currentMotorFL);
+    driveMotor(FR_MOTOR_PWM, FR_MOTOR_DIR, -currentMotorFR);
+    driveMotor(RL_MOTOR_PWM, RL_MOTOR_DIR,  currentMotorRL);
+    driveMotor(RR_MOTOR_PWM, RR_MOTOR_DIR, -currentMotorRR);
 }
 
 /**
@@ -615,26 +617,25 @@ void driveMotorsSmooth(int16_t targetFL, int16_t targetFR,
 void setSteeringAngle(int16_t angle) {
     angle = constrain(angle, -100, 100);
 
-    int16_t frontActuSpeed = 0;
+    int16_t actuSpeed = 0;
 
     if (abs(angle) < 8) {
         // Near center: stop actuators (hold straight)
-        frontActuSpeed = 0;
+        actuSpeed = 0;
     } else if (angle > 0) {
-        // Turn RIGHT -> Full torque EXTEND (DIR = HIGH, PWM = 200)
-        frontActuSpeed = ACTUATOR_PWM;
+        // Turn RIGHT -> Full torque (PWM = 200)
+        actuSpeed = ACTUATOR_PWM;
     } else {
-        // Turn LEFT -> Full torque RETRACT (DIR = LOW, PWM = 200)
-        frontActuSpeed = -ACTUATOR_PWM;
+        // Turn LEFT -> Full torque reverse (PWM = -200)
+        actuSpeed = -ACTUATOR_PWM;
     }
 
-    // Front actuators steer in the requested direction
-    driveMotor(FL_ACTU_PWM, FL_ACTU_DIR, frontActuSpeed);
-    driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, frontActuSpeed);
-
-    // Rear actuators: keep stopped for normal driving
-    driveMotor(RL_ACTU_PWM, RL_ACTU_DIR, 0);
-    driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, 0);
+    // Right-side actuators (FR, RR) are mounted mirrored to Left-side (FL, RL),
+    // so we invert (-actuSpeed) on FR and RR so left & right steer in the same direction!
+    driveMotor(FL_ACTU_PWM, FL_ACTU_DIR,  actuSpeed);
+    driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, -actuSpeed);
+    driveMotor(RL_ACTU_PWM, RL_ACTU_DIR,  actuSpeed);
+    driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, -actuSpeed);
 }
 
 /**
