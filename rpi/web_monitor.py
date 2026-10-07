@@ -235,6 +235,33 @@ DASHBOARD_HTML = """
             background: #7e22ce;
             color: #fff;
         }
+        .web-lock-btn {
+            width: 100%;
+            padding: 12px 10px;
+            margin-bottom: 12px;
+            border-radius: 8px;
+            border: 2px solid #4b5563;
+            background: #1f2937;
+            color: #e5e7eb;
+            font-weight: bold;
+            font-size: 0.9em;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .web-lock-btn:hover {
+            border-color: #c084fc;
+            background: #2e1065;
+        }
+        .web-lock-btn.locked {
+            background: linear-gradient(135deg, #7e22ce, #db2777);
+            border-color: #f0abfc;
+            color: #ffffff;
+            box-shadow: 0 0 16px rgba(192, 132, 252, 0.7);
+        }
 
         .log-area {
             font-family: monospace;
@@ -274,6 +301,12 @@ DASHBOARD_HTML = """
                     <span>🕹️ Web Remote Control</span>
                     <span class="badge-web" id="webStateBadge">IDLE</span>
                 </h3>
+
+                <!-- Master Web Mode Lock Button (Completely shuts off RC & Follow modes) -->
+                <button class="web-lock-btn" id="webLockBtn" onclick="toggleWebModeLock()">
+                    <span id="webLockIcon">🔓</span>
+                    <span id="webLockText">ENABLE WEB MODE (Shut Off RC & Follow)</span>
+                </button>
 
                 <!-- Universal Speed Control -->
                 <div class="speed-control-box">
@@ -416,6 +449,7 @@ DASHBOARD_HTML = """
         // =====================================================================
         // Web Remote Control Logic
         // =====================================================================
+        let webModeLocked = false;
         let activeWebAction = null;
         let webCmdTimer = null;
         let currentSpeedPct = 60;
@@ -431,6 +465,44 @@ DASHBOARD_HTML = """
             }
         }
 
+        function updateLockButtonUI() {
+            const btn = document.getElementById('webLockBtn');
+            const icon = document.getElementById('webLockIcon');
+            const txt = document.getElementById('webLockText');
+            if (webModeLocked) {
+                btn.classList.add('locked');
+                icon.textContent = '🔒';
+                txt.textContent = 'WEB MODE ACTIVE — Click to Return to RC/Follow';
+            } else {
+                btn.classList.remove('locked');
+                icon.textContent = '🔓';
+                txt.textContent = 'ENABLE WEB MODE (Shut Off RC & Follow)';
+            }
+        }
+
+        function toggleWebModeLock() {
+            const targetLock = !webModeLocked;
+            if (!targetLock) {
+                activeWebAction = null;
+                if (webCmdTimer) {
+                    clearInterval(webCmdTimer);
+                    webCmdTimer = null;
+                }
+            }
+            fetch('/api/web_lock', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({locked: targetLock})
+            })
+            .then(r => r.json())
+            .then(data => {
+                webModeLocked = !!data.web_locked;
+                updateLockButtonUI();
+                updateRemoteUI();
+            })
+            .catch(() => {});
+        }
+
         function sendWebControlCommand(action) {
             fetch('/api/web_control', {
                 method: 'POST',
@@ -439,7 +511,15 @@ DASHBOARD_HTML = """
                     action: action,
                     speed_pct: currentSpeedPct
                 })
-            }).catch(() => {});
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.web_locked !== undefined) {
+                    webModeLocked = !!data.web_locked;
+                    updateLockButtonUI();
+                }
+            })
+            .catch(() => {});
         }
 
         function updateRemoteUI() {
@@ -454,6 +534,9 @@ DASHBOARD_HTML = """
             if (activeWebAction) {
                 badge.textContent = activeWebAction.replace('_', ' ').toUpperCase();
                 badge.classList.add('active');
+            } else if (webModeLocked) {
+                badge.textContent = 'LOCKED (RC/FOLLOW OFF)';
+                badge.classList.add('active');
             } else {
                 badge.textContent = 'IDLE (RC / FOLLOW)';
                 badge.classList.remove('active');
@@ -462,15 +545,17 @@ DASHBOARD_HTML = """
 
         function startWebAction(action) {
             activeWebAction = action;
+            webModeLocked = true; // Auto-lock Web Mode so RC & Follow cannot interfere
+            updateLockButtonUI();
             updateRemoteUI();
             sendWebControlCommand(action);
             if (webCmdTimer) clearInterval(webCmdTimer);
-            // Send keepalive every 150ms so Arduino 600ms watchdog stays active
+            // Send keepalive every 200ms while action is active
             webCmdTimer = setInterval(() => {
                 if (activeWebAction) {
                     sendWebControlCommand(activeWebAction);
                 }
-            }, 150);
+            }, 200);
         }
 
         function triggerWebStop() {
@@ -518,12 +603,20 @@ DASHBOARD_HTML = """
             fetch('/api/status')
                 .then(r => r.json())
                 .then(data => {
+                    // Sync lock state
+                    if (data.web_locked !== undefined && data.web_locked !== webModeLocked) {
+                        webModeLocked = !!data.web_locked;
+                        updateLockButtonUI();
+                        updateRemoteUI();
+                    }
+
                     // Mode
                     const modeEl = document.getElementById('modeDisplay');
                     const modeNames = {0: 'RC', 1: 'FOLLOW', 2: 'FAILSAFE'};
                     const modeClasses = {0: 'mode-rc', 1: 'mode-follow', 2: 'mode-failsafe'};
-                    if (data.web_override) {
-                        modeEl.textContent = 'WEB (' + (data.web_action || '').toUpperCase() + ')';
+                    if (data.web_override || data.web_locked) {
+                        const label = data.web_action ? data.web_action.toUpperCase() : 'STANDBY (RC/FOLLOW OFF)';
+                        modeEl.textContent = 'WEB (' + label + ')';
                         modeEl.className = 'stat-value mode-web';
                     } else {
                         modeEl.textContent = modeNames[data.mode] || 'UNKNOWN';
@@ -623,6 +716,7 @@ class WebMonitor:
       - MJPEG live camera stream with detection overlay
       - JSON API for rover status
       - Web Remote Control override (Forward, Reverse, 360 Right, 360 Left, Universal Speed)
+      - Dedicated Web Mode Lock (shuts off RC and Follow modes completely)
       - Dashboard UI
     """
 
@@ -638,6 +732,7 @@ class WebMonitor:
         self._log_lock = threading.Lock()
 
         # Web manual control state
+        self.web_mode_locked = False
         self.web_override_until = 0.0
         self.web_action = None
         self.web_left_speed = 0
@@ -656,6 +751,21 @@ class WebMonitor:
     def is_web_override_active(self):
         """Return True if a web manual control command is currently active."""
         return time.time() < self.web_override_until
+
+    def is_web_mode_active(self):
+        """Return True if Web Mode is locked ON or a web movement is currently active."""
+        return self.web_mode_locked or (time.time() < self.web_override_until)
+
+    def get_web_motor_targets(self):
+        """Return (left_speed, right_speed) for the 20Hz RPi web mode loop."""
+        if time.time() < self.web_override_until:
+            return self.web_left_speed, self.web_right_speed
+        self.web_action = None
+        self.web_left_speed = 0
+        self.web_right_speed = 0
+        self.current_speed = 0
+        self.current_steer = 0
+        return 0, 0
 
     def _setup_log_capture(self):
         """Add a handler that captures log lines for the web UI."""
@@ -687,6 +797,27 @@ class WebMonitor:
                 mimetype='multipart/x-mixed-replace; boundary=frame'
             )
 
+        @self.app.route('/api/web_lock', methods=['POST'])
+        def api_web_lock():
+            data = request.get_json(silent=True) or {}
+            locked = bool(data.get('locked', False))
+            self.web_mode_locked = locked
+            self.web_override_until = 0.0
+            self.web_action = None
+            self.web_left_speed = 0
+            self.web_right_speed = 0
+            self.current_speed = 0
+            self.current_steer = 0
+            self.rover.serial.send_web_lock(locked)
+            if locked:
+                logger.info("🔒 Web Mode LOCKED — RC and Follow modes completely shut off")
+            else:
+                logger.info("🔓 Web Mode UNLOCKED — Returned control to RC / Follow mode")
+            return jsonify({
+                'ok': True,
+                'web_locked': self.web_mode_locked
+            })
+
         @self.app.route('/api/web_control', methods=['POST'])
         def api_web_control():
             data = request.get_json(silent=True) or {}
@@ -717,7 +848,12 @@ class WebMonitor:
                 self.current_steer = 0
                 self.rover.serial.send_web_drive(0, 0)
             else:
-                self.web_override_until = time.time() + 0.6
+                # Auto-enable Web Mode lock when driving from Web so RC/Follow never mix
+                if not self.web_mode_locked:
+                    self.web_mode_locked = True
+                    self.rover.serial.send_web_lock(True)
+                    logger.info("🔒 Web Mode auto-locked on movement — RC & Follow shut off")
+                self.web_override_until = time.time() + 1.5
                 self.web_action = action
                 self.web_left_speed = left_spd
                 self.web_right_speed = right_spd
@@ -727,6 +863,7 @@ class WebMonitor:
             return jsonify({
                 'ok': True,
                 'action': action,
+                'web_locked': self.web_mode_locked,
                 'left_speed': left_spd,
                 'right_speed': right_spd
             })
@@ -750,6 +887,7 @@ class WebMonitor:
 
             return jsonify({
                 'mode': self.rover.serial.get_mode(),
+                'web_locked': self.web_mode_locked,
                 'web_override': self.is_web_override_active(),
                 'web_action': self.web_action if self.is_web_override_active() else None,
                 'speed': self.current_speed,

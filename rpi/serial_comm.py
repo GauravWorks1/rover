@@ -19,7 +19,7 @@ import logging
 from config import (
     SERIAL_PORT, SERIAL_BAUD, SERIAL_TIMEOUT,
     START_BYTE, END_BYTE, STATUS_START,
-    CMD_DRIVE, CMD_STOP, CMD_QUERY, CMD_WEB_DRIVE,
+    CMD_DRIVE, CMD_STOP, CMD_QUERY, CMD_WEB_DRIVE, CMD_WEB_LOCK,
     CMD_PACKET_SIZE, STATUS_PACKET_SIZE,
     MODE_RC, MODE_FOLLOW, MODE_FAILSAFE
 )
@@ -93,7 +93,7 @@ class SerialComm:
         Build a command packet to send to Arduino.
 
         Args:
-            cmd_type: CMD_DRIVE, CMD_STOP, CMD_QUERY, or CMD_WEB_DRIVE
+            cmd_type: CMD_DRIVE, CMD_STOP, CMD_QUERY, CMD_WEB_DRIVE, or CMD_WEB_LOCK
             speed:    int16 (-255 to 255), positive = forward (or left speed for web)
             steer:    int16 (-100 to 100 for CMD_DRIVE, -255 to 255 for CMD_WEB_DRIVE)
 
@@ -154,6 +154,14 @@ class SerialComm:
             right_speed: -200 to 200 (FR & RR motors)
         """
         packet = self._build_packet(CMD_WEB_DRIVE, left_speed, right_speed)
+        self._send(packet)
+
+    def send_web_lock(self, locked):
+        """
+        Enable or disable dedicated Web Mode Lock on Arduino.
+        When locked=True, Arduino completely shuts off RC and Follow modes.
+        """
+        packet = self._build_packet(CMD_WEB_LOCK, 1 if locked else 0, 0)
         self._send(packet)
 
     def send_stop(self):

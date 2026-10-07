@@ -80,6 +80,7 @@
 #define CMD_STOP        0x02
 #define CMD_QUERY       0x03
 #define CMD_WEB_DRIVE   0x04   // Direct Left/Right tank motor override from Web UI
+#define CMD_WEB_LOCK    0x05   // Dedicated Web Mode Lock (1=Shut off RC & Follow, 0=Release)
 #define CMD_PACKET_SIZE    8
 #define STATUS_PACKET_SIZE 12
 
@@ -98,7 +99,7 @@
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
-#define WEB_WATCHDOG_MS     600   // Auto-release Web override if no web packet for 600ms
+#define WEB_WATCHDOG_MS     2000  // Stop motors in Web Mode if RPi stream stops for 2.0s
 #define RC_TIMEOUT_MS       800   // Stop if no RC signal for this long
 #define SOFT_START_STEP     5     // Max PWM change per loop iteration
 #define STATUS_SEND_INTERVAL_MS 100  // Send status to RPi every 100ms
@@ -221,9 +222,10 @@ int16_t rpiSpeed = 0;     // -255 to 255
 int16_t rpiSteer = 0;     // -100 to 100
 
 // Web manual override values (independent of RC and Follow modes)
+bool webModeLocked = false;     // Master lock: completely shuts off RC & Follow modes
 bool webOverrideActive = false;
-int16_t webLeftSpeed = 0;   // -255 to 255 (FL & RL motors)
-int16_t webRightSpeed = 0;  // -255 to 255 (FR & RR motors)
+int16_t webLeftSpeed = 0;       // -255 to 255 (FL & RL motors)
+int16_t webRightSpeed = 0;      // -255 to 255 (FR & RR motors)
 unsigned long lastWebCmdTime = 0;
 
 // Current motor outputs (for soft start ramping)
@@ -291,20 +293,24 @@ void loop() {
     // 3. Determine operating mode
     updateMode();
 
-    // 4. Execute motor control (Web Manual Override takes priority while active)
-    if (webOverrideActive && (millis() - lastWebCmdTime <= WEB_WATCHDOG_MS)) {
-        // Keep steering actuators still and drive Left/Right motors directly
-        setSteeringAngle(0);
-        driveMotorsSmooth(webLeftSpeed, webRightSpeed, webLeftSpeed, webRightSpeed);
-    } else {
-        if (webOverrideActive) {
-            // Web watchdog expired -> cleanly stop before returning to normal mode
+    // 4. Execute motor control
+    // When Web Mode is locked OR actively driving, RC and Follow modes are COMPLETELY SHUT OFF
+    if (webModeLocked || webOverrideActive) {
+        if (millis() - lastWebCmdTime <= WEB_WATCHDOG_MS) {
+            setSteeringAngle(0);
+            if (webLeftSpeed == 0 && webRightSpeed == 0) {
+                stopAllMotors();
+            } else {
+                driveMotorsSmooth(webLeftSpeed, webRightSpeed, webLeftSpeed, webRightSpeed);
+            }
+        } else {
+            // Watchdog expired: stop motors safely, keep RC/Follow shut off if webModeLocked is true
             webOverrideActive = false;
             webLeftSpeed = 0;
             webRightSpeed = 0;
             stopAllMotors();
         }
-
+    } else {
         if (currentMode == MODE_FOLLOW) {
             // Follow Mode: executed via RPi vision commands (guarded by SERIAL_WATCHDOG_MS)
             executeFollowMode();
@@ -441,8 +447,10 @@ void parseCommand() {
 
     switch (cmdType) {
         case CMD_DRIVE:
-            rpiSpeed = constrain(speed, -255, 255);
-            rpiSteer = constrain(steer, -100, 100);
+            if (!webModeLocked) {
+                rpiSpeed = constrain(speed, -255, 255);
+                rpiSteer = constrain(steer, -100, 100);
+            }
             lastRpiCmdTime = millis();
             break;
 
@@ -454,6 +462,7 @@ void parseCommand() {
             webRightSpeed = 0;
             stopAllMotors();
             lastRpiCmdTime = millis();
+            lastWebCmdTime = millis();
             break;
 
         case CMD_QUERY:
@@ -466,13 +475,27 @@ void parseCommand() {
             // speed = left motors (-255..255), steer = right motors (-255..255)
             webLeftSpeed  = constrain(speed, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
             webRightSpeed = constrain(steer, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
+            lastWebCmdTime = millis();
+            lastRpiCmdTime = millis();
             if (webLeftSpeed == 0 && webRightSpeed == 0) {
                 webOverrideActive = false;
                 stopAllMotors();
             } else {
                 webOverrideActive = true;
-                lastWebCmdTime = millis();
             }
+            break;
+
+        case CMD_WEB_LOCK:
+            // speed != 0 -> Lock Web Mode ON (completely shut off RC and Follow modes)
+            // speed == 0 -> Unlock Web Mode (return to RC / Follow mode)
+            webModeLocked = (speed != 0);
+            webOverrideActive = false;
+            webLeftSpeed = 0;
+            webRightSpeed = 0;
+            rpiSpeed = 0;
+            rpiSteer = 0;
+            stopAllMotors();
+            lastWebCmdTime = millis();
             lastRpiCmdTime = millis();
             break;
     }
@@ -642,12 +665,11 @@ void driveMotorsSmooth(int16_t targetFL, int16_t targetFR,
     currentMotorRR = rampValue(currentMotorRR, targetRR, SOFT_START_STEP);
 
     // Apply to hardware
-    // NOTE: Right-side motors (FR, RR) are mounted mirrored to Left-side (FL, RL),
-    // so we invert (-currentMotorFR, -currentMotorRR) so all 4 wheels roll the same way!
+    // FR is inverted (-currentMotorFR) to match FL/RL; RR is already wired in sync (+currentMotorRR)
     driveMotor(FL_MOTOR_PWM, FL_MOTOR_DIR,  currentMotorFL);
     driveMotor(FR_MOTOR_PWM, FR_MOTOR_DIR, -currentMotorFR);
     driveMotor(RL_MOTOR_PWM, RL_MOTOR_DIR,  currentMotorRL);
-    driveMotor(RR_MOTOR_PWM, RR_MOTOR_DIR, -currentMotorRR);
+    driveMotor(RR_MOTOR_PWM, RR_MOTOR_DIR,  currentMotorRR);
 }
 
 /**
