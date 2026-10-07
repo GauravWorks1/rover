@@ -204,6 +204,10 @@ class RoverController:
 
     def _follow_mode_tick(self):
         """One iteration of follow-me mode."""
+        # If Web Remote Control is actively overriding, skip Follow PID commands
+        if self.web_monitor and self.web_monitor.is_web_override_active():
+            return
+
         # Get latest detection
         detection, age = self.detector.get_detection()
 

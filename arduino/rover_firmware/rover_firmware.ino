@@ -79,6 +79,7 @@
 #define CMD_DRIVE       0x01
 #define CMD_STOP        0x02
 #define CMD_QUERY       0x03
+#define CMD_WEB_DRIVE   0x04   // Direct Left/Right tank motor override from Web UI
 #define CMD_PACKET_SIZE    8
 #define STATUS_PACKET_SIZE 12
 
@@ -97,6 +98,7 @@
 
 // Safety
 #define SERIAL_WATCHDOG_MS  1500  // Stop if no RPi command for 1.5s (prevents mode flapping)
+#define WEB_WATCHDOG_MS     600   // Auto-release Web override if no web packet for 600ms
 #define RC_TIMEOUT_MS       800   // Stop if no RC signal for this long
 #define SOFT_START_STEP     5     // Max PWM change per loop iteration
 #define STATUS_SEND_INTERVAL_MS 100  // Send status to RPi every 100ms
@@ -218,6 +220,12 @@ int16_t rcChannels[6] = {1500, 1500, 1500, 1500, 1900, 1500};
 int16_t rpiSpeed = 0;     // -255 to 255
 int16_t rpiSteer = 0;     // -100 to 100
 
+// Web manual override values (independent of RC and Follow modes)
+bool webOverrideActive = false;
+int16_t webLeftSpeed = 0;   // -255 to 255 (FL & RL motors)
+int16_t webRightSpeed = 0;  // -255 to 255 (FR & RR motors)
+unsigned long lastWebCmdTime = 0;
+
 // Current motor outputs (for soft start ramping)
 int16_t currentMotorFL = 0;
 int16_t currentMotorFR = 0;
@@ -283,18 +291,32 @@ void loop() {
     // 3. Determine operating mode
     updateMode();
 
-    // 4. Execute mode-specific motor control
-    if (currentMode == MODE_FOLLOW) {
-        // Follow Mode: executed via RPi vision commands (guarded by SERIAL_WATCHDOG_MS)
-        executeFollowMode();
-    } else if (currentMode == MODE_RC) {
-        if (rcConnected) {
-            executeRCMode();
+    // 4. Execute motor control (Web Manual Override takes priority while active)
+    if (webOverrideActive && (millis() - lastWebCmdTime <= WEB_WATCHDOG_MS)) {
+        // Keep steering actuators still and drive Left/Right motors directly
+        setSteeringAngle(0);
+        driveMotorsSmooth(webLeftSpeed, webRightSpeed, webLeftSpeed, webRightSpeed);
+    } else {
+        if (webOverrideActive) {
+            // Web watchdog expired -> cleanly stop before returning to normal mode
+            webOverrideActive = false;
+            webLeftSpeed = 0;
+            webRightSpeed = 0;
+            stopAllMotors();
+        }
+
+        if (currentMode == MODE_FOLLOW) {
+            // Follow Mode: executed via RPi vision commands (guarded by SERIAL_WATCHDOG_MS)
+            executeFollowMode();
+        } else if (currentMode == MODE_RC) {
+            if (rcConnected) {
+                executeRCMode();
+            } else {
+                stopAllMotors();
+            }
         } else {
             stopAllMotors();
         }
-    } else {
-        stopAllMotors();
     }
 
     // 5. Send status to RPi periodically
@@ -427,6 +449,10 @@ void parseCommand() {
         case CMD_STOP:
             rpiSpeed = 0;
             rpiSteer = 0;
+            webOverrideActive = false;
+            webLeftSpeed = 0;
+            webRightSpeed = 0;
+            stopAllMotors();
             lastRpiCmdTime = millis();
             break;
 
@@ -434,6 +460,20 @@ void parseCommand() {
             // Just update the timestamp (keeps watchdog alive)
             lastRpiCmdTime = millis();
             sendStatusToRPi();
+            break;
+
+        case CMD_WEB_DRIVE:
+            // speed = left motors (-255..255), steer = right motors (-255..255)
+            webLeftSpeed  = constrain(speed, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
+            webRightSpeed = constrain(steer, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
+            if (webLeftSpeed == 0 && webRightSpeed == 0) {
+                webOverrideActive = false;
+                stopAllMotors();
+            } else {
+                webOverrideActive = true;
+                lastWebCmdTime = millis();
+            }
+            lastRpiCmdTime = millis();
             break;
     }
 }

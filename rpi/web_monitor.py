@@ -11,7 +11,7 @@ Access from any device on the same network:
 import time
 import threading
 import logging
-from flask import Flask, Response, render_template_string, jsonify
+from flask import Flask, Response, render_template_string, jsonify, request
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🤖 Rover Monitor</title>
+    <title>🤖 Rover Monitor & Remote Control</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -61,10 +61,9 @@ DASHBOARD_HTML = """
         }
         .container {
             display: grid;
-            grid-template-columns: 1fr 340px;
+            grid-template-columns: 1fr 370px;
             gap: 15px;
             padding: 15px;
-            max-height: calc(100vh - 60px);
         }
         @media (max-width: 900px) {
             .container {
@@ -110,6 +109,9 @@ DASHBOARD_HTML = """
             margin-bottom: 12px;
             text-transform: uppercase;
             letter-spacing: 1px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         .stat-row {
             display: flex;
@@ -124,6 +126,7 @@ DASHBOARD_HTML = """
         .stat-value.mode-rc { color: #ffaa00; }
         .stat-value.mode-follow { color: #00ff88; }
         .stat-value.mode-failsafe { color: #ff4444; }
+        .stat-value.mode-web { color: #c084fc; }
 
         .bar-container {
             width: 120px;
@@ -142,38 +145,104 @@ DASHBOARD_HTML = """
         .bar-speed { background: linear-gradient(90deg, #00d4ff, #0088ff); }
         .bar-steer { background: linear-gradient(90deg, #ff8800, #ffaa00); }
 
-        .controls {
+        /* Web Remote Control Panel */
+        .remote-card {
+            border: 1px solid #3b2d64;
+            background: linear-gradient(180deg, #19162b 0%, #161622 100%);
+        }
+        .speed-control-box {
+            background: #0e0e1a;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border: 1px solid #252545;
+        }
+        .speed-header {
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
+            justify-content: space-between;
+            font-size: 0.85em;
+            margin-bottom: 6px;
+            color: #bbb;
         }
-        .btn {
-            padding: 8px 16px;
-            border-radius: 6px;
-            border: 1px solid #333;
-            background: #1a1a2e;
-            color: #ddd;
+        .speed-slider {
+            width: 100%;
+            accent-color: #00d4ff;
             cursor: pointer;
-            font-size: 0.85em;
-            transition: all 0.2s;
+            height: 6px;
         }
-        .btn:hover { background: #252545; border-color: #00d4ff; }
-        .btn.active { background: #0f3460; border-color: #00d4ff; color: #00d4ff; }
+        .dpad-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+        .ctrl-btn {
+            padding: 14px 8px;
+            border-radius: 8px;
+            border: 1px solid #353560;
+            background: #1e1e36;
+            color: #fff;
+            font-weight: bold;
+            font-size: 0.85em;
+            cursor: pointer;
+            text-align: center;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            transition: all 0.15s;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+        }
+        .ctrl-btn span.icon { font-size: 1.35em; }
+        .ctrl-btn:hover { background: #2a2a4a; border-color: #00d4ff; }
+        .ctrl-btn:active, .ctrl-btn.active {
+            background: #00d4ff;
+            color: #000;
+            border-color: #fff;
+            box-shadow: 0 0 12px rgba(0, 212, 255, 0.6);
+        }
+        .ctrl-btn.stop-btn {
+            background: #45151b;
+            border-color: #ff4444;
+            color: #ffaaaa;
+        }
+        .ctrl-btn.stop-btn:hover { background: #651a22; }
+        .ctrl-btn.stop-btn:active, .ctrl-btn.stop-btn.active {
+            background: #ff3333;
+            color: #fff;
+            box-shadow: 0 0 14px rgba(255, 51, 51, 0.8);
+        }
+        .mode-toggle-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8em;
+            color: #aaa;
+            padding-top: 6px;
+            border-top: 1px solid #22223b;
+        }
+        .badge-web {
+            font-size: 0.75em;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #2b2b40;
+            color: #999;
+        }
+        .badge-web.active {
+            background: #7e22ce;
+            color: #fff;
+        }
 
-        .detection-info {
-            font-size: 0.85em;
-            padding: 8px;
-            background: #0a0a15;
-            border-radius: 6px;
-            margin-top: 8px;
-        }
         .log-area {
             font-family: monospace;
             font-size: 0.75em;
             background: #0a0a15;
             padding: 10px;
             border-radius: 6px;
-            max-height: 150px;
+            max-height: 140px;
             overflow-y: auto;
             color: #888;
             line-height: 1.6;
@@ -185,7 +254,7 @@ DASHBOARD_HTML = """
 </head>
 <body>
     <div class="header">
-        <h1>🤖 Rover Live Monitor</h1>
+        <h1>🤖 Rover Live Monitor & Web Remote</h1>
         <div>
             <span class="status-dot live" id="statusDot"></span>
             <span id="connStatus">Connected</span>
@@ -199,6 +268,73 @@ DASHBOARD_HTML = """
         </div>
 
         <div class="side-panel">
+            <!-- NEW: WEB REMOTE CONTROL PANEL -->
+            <div class="card remote-card">
+                <h3>
+                    <span>🕹️ Web Remote Control</span>
+                    <span class="badge-web" id="webStateBadge">IDLE</span>
+                </h3>
+
+                <!-- Universal Speed Control -->
+                <div class="speed-control-box">
+                    <div class="speed-header">
+                        <span>⚡ Universal Motor Speed</span>
+                        <strong id="webSpeedLabel" style="color:#00d4ff;">60% (120 PWM)</strong>
+                    </div>
+                    <input type="range" id="webSpeedSlider" class="speed-slider"
+                           min="10" max="100" step="5" value="60"
+                           oninput="onSpeedSliderChange(this.value)">
+                </div>
+
+                <!-- Control Buttons Grid -->
+                <div class="dpad-grid">
+                    <div></div>
+                    <button class="ctrl-btn" id="btn-forward"
+                            onmousedown="handleBtnPress('forward')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
+                            ontouchstart="handleTouchStart(event, 'forward')" ontouchend="handleTouchEnd(event)">
+                        <span class="icon">▲</span>
+                        <span>FORWARD</span>
+                    </button>
+                    <div></div>
+
+                    <button class="ctrl-btn" id="btn-rotate_left"
+                            onmousedown="handleBtnPress('rotate_left')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
+                            ontouchstart="handleTouchStart(event, 'rotate_left')" ontouchend="handleTouchEnd(event)">
+                        <span class="icon">↺</span>
+                        <span>360° LEFT</span>
+                    </button>
+
+                    <button class="ctrl-btn stop-btn" id="btn-stop"
+                            onclick="triggerWebStop()">
+                        <span class="icon">⏹</span>
+                        <span>STOP</span>
+                    </button>
+
+                    <button class="ctrl-btn" id="btn-rotate_right"
+                            onmousedown="handleBtnPress('rotate_right')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
+                            ontouchstart="handleTouchStart(event, 'rotate_right')" ontouchend="handleTouchEnd(event)">
+                        <span class="icon">↻</span>
+                        <span>360° RIGHT</span>
+                    </button>
+
+                    <div></div>
+                    <button class="ctrl-btn" id="btn-reverse"
+                            onmousedown="handleBtnPress('reverse')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
+                            ontouchstart="handleTouchStart(event, 'reverse')" ontouchend="handleTouchEnd(event)">
+                        <span class="icon">▼</span>
+                        <span>REVERSE</span>
+                    </button>
+                    <div></div>
+                </div>
+
+                <div class="mode-toggle-row">
+                    <label style="cursor:pointer; display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" id="latchModeToggle" checked>
+                        <span>Latch Mode (Click to run, click STOP to halt)</span>
+                    </label>
+                </div>
+            </div>
+
             <div class="card">
                 <h3>⚡ Status</h3>
                 <div class="stat-row">
@@ -277,6 +413,106 @@ DASHBOARD_HTML = """
     </div>
 
     <script>
+        // =====================================================================
+        // Web Remote Control Logic
+        // =====================================================================
+        let activeWebAction = null;
+        let webCmdTimer = null;
+        let currentSpeedPct = 60;
+
+        function onSpeedSliderChange(val) {
+            currentSpeedPct = parseInt(val, 10);
+            const pwm = Math.round((currentSpeedPct / 100) * 200);
+            document.getElementById('webSpeedLabel').textContent =
+                currentSpeedPct + '% (' + pwm + ' PWM)';
+            // If currently moving, immediately send updated speed
+            if (activeWebAction) {
+                sendWebControlCommand(activeWebAction);
+            }
+        }
+
+        function sendWebControlCommand(action) {
+            fetch('/api/web_control', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    action: action,
+                    speed_pct: currentSpeedPct
+                })
+            }).catch(() => {});
+        }
+
+        function updateRemoteUI() {
+            const actions = ['forward', 'reverse', 'rotate_left', 'rotate_right'];
+            actions.forEach(a => {
+                const btn = document.getElementById('btn-' + a);
+                if (btn) {
+                    btn.classList.toggle('active', activeWebAction === a);
+                }
+            });
+            const badge = document.getElementById('webStateBadge');
+            if (activeWebAction) {
+                badge.textContent = activeWebAction.replace('_', ' ').toUpperCase();
+                badge.classList.add('active');
+            } else {
+                badge.textContent = 'IDLE (RC / FOLLOW)';
+                badge.classList.remove('active');
+            }
+        }
+
+        function startWebAction(action) {
+            activeWebAction = action;
+            updateRemoteUI();
+            sendWebControlCommand(action);
+            if (webCmdTimer) clearInterval(webCmdTimer);
+            // Send keepalive every 150ms so Arduino 600ms watchdog stays active
+            webCmdTimer = setInterval(() => {
+                if (activeWebAction) {
+                    sendWebControlCommand(activeWebAction);
+                }
+            }, 150);
+        }
+
+        function triggerWebStop() {
+            activeWebAction = null;
+            if (webCmdTimer) {
+                clearInterval(webCmdTimer);
+                webCmdTimer = null;
+            }
+            updateRemoteUI();
+            sendWebControlCommand('stop');
+        }
+
+        function handleBtnPress(action) {
+            const isLatch = document.getElementById('latchModeToggle').checked;
+            if (isLatch) {
+                if (activeWebAction === action) {
+                    triggerWebStop();
+                } else {
+                    startWebAction(action);
+                }
+            } else {
+                startWebAction(action);
+            }
+        }
+
+        function handleBtnRelease() {
+            const isLatch = document.getElementById('latchModeToggle').checked;
+            if (!isLatch && activeWebAction) {
+                triggerWebStop();
+            }
+        }
+
+        function handleTouchStart(e, action) {
+            e.preventDefault();
+            handleBtnPress(action);
+        }
+
+        function handleTouchEnd(e) {
+            e.preventDefault();
+            handleBtnRelease();
+        }
+
         // Poll status every 500ms
         function updateStatus() {
             fetch('/api/status')
@@ -286,8 +522,13 @@ DASHBOARD_HTML = """
                     const modeEl = document.getElementById('modeDisplay');
                     const modeNames = {0: 'RC', 1: 'FOLLOW', 2: 'FAILSAFE'};
                     const modeClasses = {0: 'mode-rc', 1: 'mode-follow', 2: 'mode-failsafe'};
-                    modeEl.textContent = modeNames[data.mode] || 'UNKNOWN';
-                    modeEl.className = 'stat-value ' + (modeClasses[data.mode] || '');
+                    if (data.web_override) {
+                        modeEl.textContent = 'WEB (' + (data.web_action || '').toUpperCase() + ')';
+                        modeEl.className = 'stat-value mode-web';
+                    } else {
+                        modeEl.textContent = modeNames[data.mode] || 'UNKNOWN';
+                        modeEl.className = 'stat-value ' + (modeClasses[data.mode] || '');
+                    }
 
                     // Speed & Steer
                     document.getElementById('speedValue').textContent = data.speed;
@@ -381,6 +622,7 @@ class WebMonitor:
     Provides:
       - MJPEG live camera stream with detection overlay
       - JSON API for rover status
+      - Web Remote Control override (Forward, Reverse, 360 Right, 360 Left, Universal Speed)
       - Dashboard UI
     """
 
@@ -395,6 +637,12 @@ class WebMonitor:
         self._log_max = 50
         self._log_lock = threading.Lock()
 
+        # Web manual control state
+        self.web_override_until = 0.0
+        self.web_action = None
+        self.web_left_speed = 0
+        self.web_right_speed = 0
+
         # Install custom log handler to capture logs
         self._setup_log_capture()
 
@@ -404,6 +652,10 @@ class WebMonitor:
         # Current command values (updated by rover controller)
         self.current_speed = 0
         self.current_steer = 0
+
+    def is_web_override_active(self):
+        """Return True if a web manual control command is currently active."""
+        return time.time() < self.web_override_until
 
     def _setup_log_capture(self):
         """Add a handler that captures log lines for the web UI."""
@@ -435,6 +687,50 @@ class WebMonitor:
                 mimetype='multipart/x-mixed-replace; boundary=frame'
             )
 
+        @self.app.route('/api/web_control', methods=['POST'])
+        def api_web_control():
+            data = request.get_json(silent=True) or {}
+            action = data.get('action', 'stop')
+            speed_pct = max(0, min(100, int(data.get('speed_pct', 60))))
+            pwm = int(round((speed_pct / 100.0) * 200))
+
+            if action == 'forward':
+                left_spd, right_spd = pwm, pwm
+            elif action == 'reverse':
+                left_spd, right_spd = -pwm, -pwm
+            elif action == 'rotate_right':
+                # 360 Rotate Right: Left motors forward (+), Right motors backward (-)
+                left_spd, right_spd = pwm, -pwm
+            elif action == 'rotate_left':
+                # 360 Rotate Left: Right motors forward (+), Left motors backward (-)
+                left_spd, right_spd = -pwm, pwm
+            else:
+                left_spd, right_spd = 0, 0
+                action = 'stop'
+
+            if action == 'stop' or pwm == 0:
+                self.web_override_until = 0.0
+                self.web_action = None
+                self.web_left_speed = 0
+                self.web_right_speed = 0
+                self.current_speed = 0
+                self.current_steer = 0
+                self.rover.serial.send_web_drive(0, 0)
+            else:
+                self.web_override_until = time.time() + 0.6
+                self.web_action = action
+                self.web_left_speed = left_spd
+                self.web_right_speed = right_spd
+                self.current_speed = pwm if action != 'reverse' else -pwm
+                self.rover.serial.send_web_drive(left_spd, right_spd)
+
+            return jsonify({
+                'ok': True,
+                'action': action,
+                'left_speed': left_spd,
+                'right_speed': right_spd
+            })
+
         @self.app.route('/api/status')
         def api_status():
             # Get detection info
@@ -454,6 +750,8 @@ class WebMonitor:
 
             return jsonify({
                 'mode': self.rover.serial.get_mode(),
+                'web_override': self.is_web_override_active(),
+                'web_action': self.web_action if self.is_web_override_active() else None,
                 'speed': self.current_speed,
                 'steer': self.current_steer,
                 'arduino_connected': self.rover.serial.is_connected(),

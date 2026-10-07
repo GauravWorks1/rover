@@ -19,7 +19,7 @@ import logging
 from config import (
     SERIAL_PORT, SERIAL_BAUD, SERIAL_TIMEOUT,
     START_BYTE, END_BYTE, STATUS_START,
-    CMD_DRIVE, CMD_STOP, CMD_QUERY,
+    CMD_DRIVE, CMD_STOP, CMD_QUERY, CMD_WEB_DRIVE,
     CMD_PACKET_SIZE, STATUS_PACKET_SIZE,
     MODE_RC, MODE_FOLLOW, MODE_FAILSAFE
 )
@@ -93,16 +93,17 @@ class SerialComm:
         Build a command packet to send to Arduino.
 
         Args:
-            cmd_type: CMD_DRIVE, CMD_STOP, or CMD_QUERY
-            speed:    int16 (-255 to 255), positive = forward
-            steer:    int16 (-100 to 100), positive = right
+            cmd_type: CMD_DRIVE, CMD_STOP, CMD_QUERY, or CMD_WEB_DRIVE
+            speed:    int16 (-255 to 255), positive = forward (or left speed for web)
+            steer:    int16 (-100 to 100 for CMD_DRIVE, -255 to 255 for CMD_WEB_DRIVE)
 
         Returns:
             bytearray of CMD_PACKET_SIZE bytes
         """
         # Clamp values
         speed = max(-255, min(255, int(speed)))
-        steer = max(-100, min(100, int(steer)))
+        max_steer = 255 if cmd_type == CMD_WEB_DRIVE else 100
+        steer = max(-max_steer, min(max_steer, int(steer)))
 
         # Pack speed and steer as signed 16-bit big-endian
         speed_h = (speed >> 8) & 0xFF
@@ -142,6 +143,17 @@ class SerialComm:
             steer: -100 to 100 (negative = left, positive = right)
         """
         packet = self._build_packet(CMD_DRIVE, speed, steer)
+        self._send(packet)
+
+    def send_web_drive(self, left_speed, right_speed):
+        """
+        Send a direct Left/Right tank motor override command from Web UI.
+
+        Args:
+            left_speed:  -200 to 200 (FL & RL motors)
+            right_speed: -200 to 200 (FR & RR motors)
+        """
+        packet = self._build_packet(CMD_WEB_DRIVE, left_speed, right_speed)
         self._send(packet)
 
     def send_stop(self):

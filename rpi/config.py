@@ -19,6 +19,7 @@ STATUS_START    = 0xBB
 CMD_DRIVE       = 0x01
 CMD_STOP        = 0x02
 CMD_QUERY       = 0x03
+CMD_WEB_DRIVE   = 0x04   # Direct Left/Right tank motor override from Web UI
 
 # Packet sizes
 CMD_PACKET_SIZE     = 8   # RPi -> Arduino
