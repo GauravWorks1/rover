@@ -62,11 +62,12 @@
 //  These MUST be interrupt-capable pins on the Mega!
 //  Mega interrupt pins: 2, 3, 18, 19, 20, 21
 // -------------------------------------------------------
-#define RC_PIN_CH1     2    // CH1 Steering    (INT0)
-#define RC_PIN_CH2     3    // CH2 Throttle    (INT1)
-#define RC_PIN_CH3     18   // CH3 Aux         (INT5)
-#define RC_PIN_CH5     19   // CH5 SwB Mode Sw (INT4)
-#define RC_PIN_CH6     20   // CH6 SwB / Aux   (INT3)
+#define RC_PIN_CH1     2    // CH1 Right Stick Left/Right (INT0)
+#define RC_PIN_CH2     3    // CH2 Right Stick Up/Down    (INT1)
+#define RC_PIN_CH3     18   // CH3 Left Stick Up/Down     (INT5)
+#define RC_PIN_CH4     21   // CH4 Left Stick Left/Right  (INT2)
+#define RC_PIN_CH5     19   // CH5 SwB Mode Sw            (INT4)
+#define RC_PIN_CH6     20   // CH6 SwB / Aux              (INT3)
 
 // ============================================================================
 //  CONSTANTS
@@ -116,12 +117,14 @@
 volatile uint16_t rc_ch1_raw = 1500;
 volatile uint16_t rc_ch2_raw = 1500;
 volatile uint16_t rc_ch3_raw = 1500;
+volatile uint16_t rc_ch4_raw = 1500;
 volatile uint16_t rc_ch5_raw = 1900;
 volatile uint16_t rc_ch6_raw = 1900;
 
 volatile unsigned long rc_ch1_rise = 0;
 volatile unsigned long rc_ch2_rise = 0;
 volatile unsigned long rc_ch3_rise = 0;
+volatile unsigned long rc_ch4_rise = 0;
 volatile unsigned long rc_ch5_rise = 0;
 volatile unsigned long rc_ch6_rise = 0;
 
@@ -166,6 +169,20 @@ void isr_ch3() {
             uint16_t pw = (uint16_t)(micros() - rc_ch3_rise);
             if (pw >= 900 && pw <= 2100) {
                 rc_ch3_raw = pw;
+                rc_last_update = millis();
+            }
+        }
+    }
+}
+
+void isr_ch4() {
+    if (digitalRead(RC_PIN_CH4) == HIGH) {
+        rc_ch4_rise = micros();
+    } else {
+        if (rc_ch4_rise > 0) {
+            uint16_t pw = (uint16_t)(micros() - rc_ch4_rise);
+            if (pw >= 900 && pw <= 2100) {
+                rc_ch4_raw = pw;
                 rc_last_update = millis();
             }
         }
@@ -250,6 +267,7 @@ void setup() {
     pinMode(RC_PIN_CH1, INPUT);
     pinMode(RC_PIN_CH2, INPUT);
     pinMode(RC_PIN_CH3, INPUT);
+    pinMode(RC_PIN_CH4, INPUT);
     pinMode(RC_PIN_CH5, INPUT);
     pinMode(RC_PIN_CH6, INPUT);
 
@@ -257,6 +275,7 @@ void setup() {
     attachInterrupt(digitalPinToInterrupt(RC_PIN_CH1), isr_ch1, CHANGE);
     attachInterrupt(digitalPinToInterrupt(RC_PIN_CH2), isr_ch2, CHANGE);
     attachInterrupt(digitalPinToInterrupt(RC_PIN_CH3), isr_ch3, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(RC_PIN_CH4), isr_ch4, CHANGE);
     attachInterrupt(digitalPinToInterrupt(RC_PIN_CH5), isr_ch5, CHANGE);
     attachInterrupt(digitalPinToInterrupt(RC_PIN_CH6), isr_ch6, CHANGE);
 
@@ -349,6 +368,7 @@ void readRC() {
     int16_t ch1 = rc_ch1_raw;
     int16_t ch2 = rc_ch2_raw;
     int16_t ch3 = rc_ch3_raw;
+    int16_t ch4 = rc_ch4_raw;
     int16_t ch5 = rc_ch5_raw;
     int16_t ch6 = rc_ch6_raw;
     unsigned long lastUpdate = rc_last_update;
@@ -375,10 +395,10 @@ void readRC() {
     if (ch5Active) prevCh5 = ch5;
     if (ch6Active) prevCh6 = ch6;
 
-    rcChannels[0] = ch1;  // CH1 Steer (Pin 2)
-    rcChannels[1] = ch2;  // CH2 Throttle (Pin 3)
-    rcChannels[2] = ch3;  // CH3 Aux (Pin 18)
-    rcChannels[3] = 1500; // CH4 default center
+    rcChannels[0] = ch1;  // CH1 Right Stick Left/Right (Pin 2)
+    rcChannels[1] = ch2;  // CH2 Right Stick Up/Down    (Pin 3)
+    rcChannels[2] = ch3;  // CH3 Left Stick Up/Down     (Pin 18)
+    rcChannels[3] = ch4;  // CH4 Left Stick Left/Right  (Pin 21)
     rcChannels[4] = (activeModePin == 6) ? ch6 : ch5;  // SwB Mode Switch
     rcChannels[5] = ch6;
 
@@ -540,16 +560,22 @@ void updateMode() {
 // ============================================================================
 
 void executeRCMode() {
-    // Map RC sticks to motor commands
-    // CH2 (throttle): 1000=full reverse, 1500=stop, 2000=full forward
-    // CH1 (steering): 1000=full left, 1500=center, 2000=full right
+    // Map RC sticks to motor + actuator commands:
+    //   CH2 (Pin 3, Right Stick Up/Down):  Throttle (1000=full reverse, 1500=stop, 2000=full forward)
+    //   Steering works on BOTH joysticks automatically:
+    //     - CH1 (Pin 2,  Right Stick Left/Right)
+    //     - CH4 (Pin 21, Left Stick Left/Right — if wired to Pin 21)
+    //     - CH3 (Pin 18, Left Stick Up/Down — if used as actuator stick)
 
     int16_t throttle = rcChannels[1];  // CH2
-    int16_t steering = rcChannels[0];  // CH1
 
-    // Apply deadzone
+    // Apply deadzone to throttle and all candidate steering channels
     int16_t throttleCmd = applyDeadzone(throttle, RC_CENTER, RC_DEADZONE);
-    int16_t steeringCmd = applyDeadzone(steering, RC_CENTER, RC_DEADZONE);
+    int16_t steerCh1Cmd = applyDeadzone(rcChannels[0], RC_CENTER, RC_DEADZONE);  // Right stick L/R (Pin 2)
+    int16_t steerCh4Cmd = applyDeadzone(rcChannels[3], RC_CENTER, RC_DEADZONE);  // Left stick L/R  (Pin 21)
+
+    // Pick whichever joystick is being moved further (so BOTH joysticks control steering!)
+    int16_t steeringCmd = (abs(steerCh4Cmd) > abs(steerCh1Cmd)) ? steerCh4Cmd : steerCh1Cmd;
 
     // Map to motor range (-MAX_MOTOR_PWM to +MAX_MOTOR_PWM)
     int16_t fwdSpeed = map(throttleCmd, -500, 500, -MAX_MOTOR_PWM, MAX_MOTOR_PWM);
@@ -598,13 +624,23 @@ void executeFollowMode() {
     int16_t speed = rpiSpeed;
     int16_t steer = rpiSteer;  // -100 to 100
 
+    // Always drive linear actuators in Follow Mode so wheels track the person
+    // even when drive motors are stopped at target distance!
+    setSteeringAngle(steer);
+
     // SAFETY #1 & #2:
     // - Never reverse blindly in Follow Mode (clamp speed >= 0)
     // - When RPi commands speed <= 0 (person reached target distance or Too-Close Emergency Stop),
-    //   immediately hard-brake all motors to 0 instead of slowly ramping down!
+    //   immediately hard-brake drive motors to 0 while keeping steering actuators active!
     if (speed <= 0) {
-        stopAllMotors();
-        setSteeringAngle(steer);
+        analogWrite(FL_MOTOR_PWM, 0);
+        analogWrite(FR_MOTOR_PWM, 0);
+        analogWrite(RL_MOTOR_PWM, 0);
+        analogWrite(RR_MOTOR_PWM, 0);
+        currentMotorFL = 0;
+        currentMotorFR = 0;
+        currentMotorRL = 0;
+        currentMotorRR = 0;
         return;
     }
 
@@ -620,9 +656,6 @@ void executeFollowMode() {
     targetFR = max((int16_t)0, (int16_t)(targetFR - diffMix));
     targetRL = max((int16_t)0, (int16_t)(targetRL + diffMix));
     targetRR = max((int16_t)0, (int16_t)(targetRR - diffMix));
-
-    // Set steering actuators
-    setSteeringAngle(steer);
 
     // Apply soft start and drive motors
     driveMotorsSmooth(targetFL, targetFR, targetRL, targetRR);
@@ -702,12 +735,12 @@ void setSteeringAngle(int16_t angle) {
         actuSpeed = -ACTUATOR_PWM;
     }
 
-    // Right-side actuators (FR, RR) are mounted mirrored to Left-side (FL, RL),
-    // so we invert (-actuSpeed) on FR and RR so left & right steer in the same direction!
+    // Sync all 4 linear actuators:
+    // Just like the drive motors, FR is inverted (-actuSpeed) while RR is wired in sync (+actuSpeed)
     driveMotor(FL_ACTU_PWM, FL_ACTU_DIR,  actuSpeed);
     driveMotor(FR_ACTU_PWM, FR_ACTU_DIR, -actuSpeed);
     driveMotor(RL_ACTU_PWM, RL_ACTU_DIR,  actuSpeed);
-    driveMotor(RR_ACTU_PWM, RR_ACTU_DIR, -actuSpeed);
+    driveMotor(RR_ACTU_PWM, RR_ACTU_DIR,  actuSpeed);
 }
 
 /**

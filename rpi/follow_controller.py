@@ -168,28 +168,7 @@ class FollowController:
         self._last_detection_time = time.time()
         current_area = detection['area_ratio']
 
-        # =====================================================================
-        # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake)
-        # If person is closer than TOO_CLOSE_STOP_RATIO (or already within target
-        # distance), immediately cut forward speed to 0 without slow ramping!
-        # =====================================================================
-        if current_area >= TOO_CLOSE_STOP_RATIO:
-            if not self._too_close_active:
-                logger.warning(
-                    f"⚠️ SAFETY STOP: Person too close ({current_area:.1%} >= {TOO_CLOSE_STOP_RATIO:.0%}) — Instant Brake!"
-                )
-                self._too_close_active = True
-            self.speed_pid.reset()
-            self.steer_pid.reset()
-            self._current_speed = 0.0
-            self._current_steer = 0.0
-            return 0, 0
-        else:
-            if self._too_close_active:
-                logger.info("✅ Person at safe distance — resuming Follow Mode")
-                self._too_close_active = False
-
-        # --- Steering: horizontal centering ---
+        # --- Steering: horizontal centering (ALWAYS active when person is detected!) ---
         # Offset in pixels from center (-320 to +320)
         # Positive offset = person is to the RIGHT
         offset_px = detection['cx'] - FRAME_CENTER_X
@@ -202,6 +181,27 @@ class FollowController:
             steer_error = (offset_px / (CAMERA_WIDTH / 2.0)) * 100.0
 
         steer_target = self.steer_pid.compute(steer_error)
+        self._current_steer = self._ramp(self._current_steer, steer_target,
+                                          STEER_RAMP_RATE)
+
+        # =====================================================================
+        # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake on DRIVE motors)
+        # Keep steering actuators active (self._current_steer) so wheels still
+        # track left/right even when standing close to the camera!
+        # =====================================================================
+        if current_area >= TOO_CLOSE_STOP_RATIO:
+            if not self._too_close_active:
+                logger.warning(
+                    f"⚠️ SAFETY STOP: Person too close ({current_area:.1%} >= {TOO_CLOSE_STOP_RATIO:.0%}) — Drive motors stopped, steering active!"
+                )
+                self._too_close_active = True
+            self.speed_pid.reset()
+            self._current_speed = 0.0
+            return 0, int(self._current_steer)
+        else:
+            if self._too_close_active:
+                logger.info("✅ Person at safe distance — resuming Follow Mode drive")
+                self._too_close_active = False
 
         # --- Speed: distance control via bounding box area ---
         # Error = target_area_ratio - current_area_ratio
@@ -232,9 +232,6 @@ class FollowController:
         # Safety #2: Final hard clamp so Follow Mode never sends negative (reverse) speed
         if not ALLOW_FOLLOW_REVERSE and self._current_speed < 0:
             self._current_speed = 0.0
-
-        self._current_steer = self._ramp(self._current_steer, steer_target,
-                                          STEER_RAMP_RATE)
 
         return int(self._current_speed), int(self._current_steer)
 
