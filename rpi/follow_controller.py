@@ -171,17 +171,21 @@ class FollowController:
         self._last_detection_time = time.time()
         current_area = detection['area_ratio']
 
-        # --- Steering: horizontal centering (ALWAYS active when person is detected!) ---
+        # --- Steering: ONLY steer when person moves out of the middle zone! ---
         offset_px = detection['cx'] - FRAME_CENTER_X
 
-        if abs(offset_px) < STEER_DEADZONE_PX:
-            steer_error = 0.0
+        if abs(offset_px) <= STEER_DEADZONE_PX:
+            # Person is inside the middle zone -> keep actuators completely still (0 steer)
+            self.steer_pid.reset()
+            self._current_steer = 0.0
         else:
-            steer_error = (offset_px / (CAMERA_WIDTH / 2.0)) * 100.0
-
-        steer_target = self.steer_pid.compute(steer_error)
-        self._current_steer = self._ramp(self._current_steer, steer_target,
-                                          STEER_RAMP_RATE)
+            # Person moved out of the middle zone -> steer smoothly based on distance outside middle
+            effective_offset = offset_px - (STEER_DEADZONE_PX if offset_px > 0 else -STEER_DEADZONE_PX)
+            max_outer_px = max(1.0, (CAMERA_WIDTH / 2.0) - STEER_DEADZONE_PX)
+            steer_error = (effective_offset / max_outer_px) * 100.0
+            steer_target = self.steer_pid.compute(steer_error)
+            self._current_steer = self._ramp(self._current_steer, steer_target,
+                                              STEER_RAMP_RATE)
 
         # =====================================================================
         # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake on DRIVE motors)

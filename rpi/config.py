@@ -60,8 +60,8 @@ KP_STEER = 1.05
 KI_STEER = 0.02
 KD_STEER = 0.15
 
-# Dead zones (ignore small errors to prevent jitter)
-STEER_DEADZONE_PX   = 25     # pixels from center X (for 640px width)
+# Dead zones (wide middle zone so actuators ONLY steer when person leaves the center)
+STEER_DEADZONE_PX   = 95     # ±95px around center (x=225..415 out of 640px = middle 30% no-steer zone)
 AREA_DEADZONE_RATIO = 0.012  # area ratio tolerance
 
 # Constant Follow Mode Speed (Default 5 RPM crawl speed)

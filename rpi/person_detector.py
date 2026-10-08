@@ -14,7 +14,7 @@ import threading
 import logging
 import os
 
-from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS
+from config import CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS, STEER_DEADZONE_PX
 
 logger = logging.getLogger(__name__)
 
@@ -697,6 +697,11 @@ class PersonDetector:
                 cv2.putText(annotated, f"OWNER LOCK ({int(self.owner_match_score * 100)}%)",
                             (42, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
 
+        # Draw Middle Zone (No-Steer Corridor) boundary lines so user can see when steering activates
+        mid_left = (w // 2) - STEER_DEADZONE_PX
+        mid_right = (w // 2) + STEER_DEADZONE_PX
+        cv2.line(annotated, (mid_left, 60), (mid_left, h - 60), (180, 180, 0), 1)
+        cv2.line(annotated, (mid_right, 60), (mid_right, h - 60), (180, 180, 0), 1)
         cv2.drawMarker(annotated, (w // 2, h // 2), (255, 0, 0), cv2.MARKER_CROSS, 20, 1)
 
         return best_detection, annotated
