@@ -161,11 +161,8 @@ class RoverController:
                 self._on_mode_change(self._prev_mode, self._current_mode)
                 self._prev_mode = self._current_mode
 
-            # Execute mode-specific logic
-            # If Web Remote Control is locked or active, completely bypass RC & Follow ticks
-            if self.web_monitor and self.web_monitor.is_web_mode_active():
-                self._web_mode_tick()
-            elif self._current_mode == MODE_FOLLOW and not self.no_camera:
+            # Execute mode-specific logic (RC Mode or Follow Mode via FlySky SwB)
+            if self._current_mode == MODE_FOLLOW and not self.no_camera:
                 self._follow_mode_tick()
             elif self._current_mode == MODE_RC:
                 self._rc_mode_tick()
@@ -195,9 +192,6 @@ class RoverController:
         new_name = mode_names.get(new_mode, f"UNKNOWN({new_mode})")
         logger.info(f"Mode change: {old_name} -> {new_name}")
 
-        if self.web_monitor and self.web_monitor.is_web_mode_active():
-            return
-
         if new_mode == MODE_FOLLOW:
             # Reset PID controller for fresh start
             self.follower.reset()
@@ -208,17 +202,8 @@ class RoverController:
             self.serial.send_stop()
             self.follower.reset()
 
-    def _web_mode_tick(self):
-        """One iteration of dedicated Web Mode — keeps Arduino locked and streams web motor speeds."""
-        left_spd, right_spd = self.web_monitor.get_web_motor_targets()
-        self.serial.send_web_drive(left_spd, right_spd)
-
     def _follow_mode_tick(self):
         """One iteration of follow-me mode."""
-        # If Web Remote Control is actively overriding, skip Follow PID commands
-        if self.web_monitor and self.web_monitor.is_web_mode_active():
-            return
-
         # Get latest detection
         detection, age = self.detector.get_detection()
 

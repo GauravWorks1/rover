@@ -295,79 +295,6 @@ DASHBOARD_HTML = """
         </div>
 
         <div class="side-panel">
-            <!-- NEW: WEB REMOTE CONTROL PANEL -->
-            <div class="card remote-card">
-                <h3>
-                    <span>🕹️ Web Remote Control</span>
-                    <span class="badge-web" id="webStateBadge">IDLE</span>
-                </h3>
-
-                <!-- Master Web Mode Lock Button (Completely shuts off RC & Follow modes) -->
-                <button class="web-lock-btn" id="webLockBtn" onclick="toggleWebModeLock()">
-                    <span id="webLockIcon">🔓</span>
-                    <span id="webLockText">ENABLE WEB MODE (Shut Off RC & Follow)</span>
-                </button>
-
-                <!-- Universal Speed Control -->
-                <div class="speed-control-box">
-                    <div class="speed-header">
-                        <span>⚡ Universal Motor Speed</span>
-                        <strong id="webSpeedLabel" style="color:#00d4ff;">60% (120 PWM)</strong>
-                    </div>
-                    <input type="range" id="webSpeedSlider" class="speed-slider"
-                           min="10" max="100" step="5" value="60"
-                           oninput="onSpeedSliderChange(this.value)">
-                </div>
-
-                <!-- Control Buttons Grid -->
-                <div class="dpad-grid">
-                    <div></div>
-                    <button class="ctrl-btn" id="btn-forward"
-                            onmousedown="handleBtnPress('forward')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
-                            ontouchstart="handleTouchStart(event, 'forward')" ontouchend="handleTouchEnd(event)">
-                        <span class="icon">▲</span>
-                        <span>FORWARD</span>
-                    </button>
-                    <div></div>
-
-                    <button class="ctrl-btn" id="btn-rotate_left"
-                            onmousedown="handleBtnPress('rotate_left')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
-                            ontouchstart="handleTouchStart(event, 'rotate_left')" ontouchend="handleTouchEnd(event)">
-                        <span class="icon">↺</span>
-                        <span>360° LEFT</span>
-                    </button>
-
-                    <button class="ctrl-btn stop-btn" id="btn-stop"
-                            onclick="triggerWebStop()">
-                        <span class="icon">⏹</span>
-                        <span>STOP</span>
-                    </button>
-
-                    <button class="ctrl-btn" id="btn-rotate_right"
-                            onmousedown="handleBtnPress('rotate_right')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
-                            ontouchstart="handleTouchStart(event, 'rotate_right')" ontouchend="handleTouchEnd(event)">
-                        <span class="icon">↻</span>
-                        <span>360° RIGHT</span>
-                    </button>
-
-                    <div></div>
-                    <button class="ctrl-btn" id="btn-reverse"
-                            onmousedown="handleBtnPress('reverse')" onmouseup="handleBtnRelease()" onmouseleave="handleBtnRelease()"
-                            ontouchstart="handleTouchStart(event, 'reverse')" ontouchend="handleTouchEnd(event)">
-                        <span class="icon">▼</span>
-                        <span>REVERSE</span>
-                    </button>
-                    <div></div>
-                </div>
-
-                <div class="mode-toggle-row">
-                    <label style="cursor:pointer; display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" id="latchModeToggle" checked>
-                        <span>Latch Mode (Click to run, click STOP to halt)</span>
-                    </label>
-                </div>
-            </div>
-
             <div class="card">
                 <h3>⚡ Status</h3>
                 <div class="stat-row">
@@ -419,10 +346,10 @@ DASHBOARD_HTML = """
                 <div class="speed-slider-box" style="margin-top:10px; margin-bottom:10px; border-color:rgba(0, 255, 136, 0.25);">
                     <div class="speed-header">
                         <span class="stat-label">Follow Mode Speed (Only)</span>
-                        <span class="stat-value" id="followSpeedLabel" style="color:#00ff88;">20 RPM (68 PWM)</span>
+                        <span class="stat-value" id="followSpeedLabel" style="color:#00ff88;">5 RPM (38 PWM)</span>
                     </div>
                     <input type="range" id="followSpeedSlider" class="speed-slider"
-                           min="5" max="60" step="1" value="20"
+                           min="1" max="60" step="1" value="5"
                            oninput="onFollowSpeedChange(this.value)">
                 </div>
                 <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
@@ -463,158 +390,6 @@ DASHBOARD_HTML = """
     </div>
 
     <script>
-        // =====================================================================
-        // Web Remote Control Logic
-        // =====================================================================
-        let webModeLocked = false;
-        let activeWebAction = null;
-        let webCmdTimer = null;
-        let currentSpeedPct = 60;
-
-        function onSpeedSliderChange(val) {
-            currentSpeedPct = parseInt(val, 10);
-            const pwm = Math.round((currentSpeedPct / 100) * 200);
-            document.getElementById('webSpeedLabel').textContent =
-                currentSpeedPct + '% (' + pwm + ' PWM)';
-            // If currently moving, immediately send updated speed
-            if (activeWebAction) {
-                sendWebControlCommand(activeWebAction);
-            }
-        }
-
-        function updateLockButtonUI() {
-            const btn = document.getElementById('webLockBtn');
-            const icon = document.getElementById('webLockIcon');
-            const txt = document.getElementById('webLockText');
-            if (webModeLocked) {
-                btn.classList.add('locked');
-                icon.textContent = '🔒';
-                txt.textContent = 'WEB MODE ACTIVE — Click to Return to RC/Follow';
-            } else {
-                btn.classList.remove('locked');
-                icon.textContent = '🔓';
-                txt.textContent = 'ENABLE WEB MODE (Shut Off RC & Follow)';
-            }
-        }
-
-        function toggleWebModeLock() {
-            const targetLock = !webModeLocked;
-            if (!targetLock) {
-                activeWebAction = null;
-                if (webCmdTimer) {
-                    clearInterval(webCmdTimer);
-                    webCmdTimer = null;
-                }
-            }
-            fetch('/api/web_lock', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({locked: targetLock})
-            })
-            .then(r => r.json())
-            .then(data => {
-                webModeLocked = !!data.web_locked;
-                updateLockButtonUI();
-                updateRemoteUI();
-            })
-            .catch(() => {});
-        }
-
-        function sendWebControlCommand(action) {
-            fetch('/api/web_control', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({
-                    action: action,
-                    speed_pct: currentSpeedPct
-                })
-            })
-            .then(r => r.json())
-            .then(data => {
-                if (data.web_locked !== undefined) {
-                    webModeLocked = !!data.web_locked;
-                    updateLockButtonUI();
-                }
-            })
-            .catch(() => {});
-        }
-
-        function updateRemoteUI() {
-            const actions = ['forward', 'reverse', 'rotate_left', 'rotate_right'];
-            actions.forEach(a => {
-                const btn = document.getElementById('btn-' + a);
-                if (btn) {
-                    btn.classList.toggle('active', activeWebAction === a);
-                }
-            });
-            const badge = document.getElementById('webStateBadge');
-            if (activeWebAction) {
-                badge.textContent = activeWebAction.replace('_', ' ').toUpperCase();
-                badge.classList.add('active');
-            } else if (webModeLocked) {
-                badge.textContent = 'LOCKED (RC/FOLLOW OFF)';
-                badge.classList.add('active');
-            } else {
-                badge.textContent = 'IDLE (RC / FOLLOW)';
-                badge.classList.remove('active');
-            }
-        }
-
-        function startWebAction(action) {
-            activeWebAction = action;
-            webModeLocked = true; // Auto-lock Web Mode so RC & Follow cannot interfere
-            updateLockButtonUI();
-            updateRemoteUI();
-            sendWebControlCommand(action);
-            if (webCmdTimer) clearInterval(webCmdTimer);
-            // Send keepalive every 200ms while action is active
-            webCmdTimer = setInterval(() => {
-                if (activeWebAction) {
-                    sendWebControlCommand(activeWebAction);
-                }
-            }, 200);
-        }
-
-        function triggerWebStop() {
-            activeWebAction = null;
-            if (webCmdTimer) {
-                clearInterval(webCmdTimer);
-                webCmdTimer = null;
-            }
-            updateRemoteUI();
-            sendWebControlCommand('stop');
-        }
-
-        function handleBtnPress(action) {
-            const isLatch = document.getElementById('latchModeToggle').checked;
-            if (isLatch) {
-                if (activeWebAction === action) {
-                    triggerWebStop();
-                } else {
-                    startWebAction(action);
-                }
-            } else {
-                startWebAction(action);
-            }
-        }
-
-        function handleBtnRelease() {
-            const isLatch = document.getElementById('latchModeToggle').checked;
-            if (!isLatch && activeWebAction) {
-                triggerWebStop();
-            }
-        }
-
-        function handleTouchStart(e, action) {
-            e.preventDefault();
-            handleBtnPress(action);
-        }
-
-        function handleTouchEnd(e) {
-            e.preventDefault();
-            handleBtnRelease();
-        }
-
         function sendFollowAction(action) {
             fetch('/api/follow_action', {
                 method: 'POST',
@@ -629,7 +404,7 @@ DASHBOARD_HTML = """
         function onFollowSpeedChange(val) {
             followSpeedEditing = true;
             const rpm = parseInt(val, 10);
-            const pwm = Math.round((rpm / 75.0) * 255);
+            const pwm = Math.round(22 + (rpm / 75.0) * 233);
             document.getElementById('followSpeedLabel').textContent =
                 rpm + ' RPM (' + pwm + ' PWM)';
             fetch('/api/follow_speed', {
@@ -653,25 +428,12 @@ DASHBOARD_HTML = """
             fetch('/api/status')
                 .then(r => r.json())
                 .then(data => {
-                    // Sync lock state
-                    if (data.web_locked !== undefined && data.web_locked !== webModeLocked) {
-                        webModeLocked = !!data.web_locked;
-                        updateLockButtonUI();
-                        updateRemoteUI();
-                    }
-
                     // Mode
                     const modeEl = document.getElementById('modeDisplay');
                     const modeNames = {0: 'RC', 1: 'FOLLOW', 2: 'FAILSAFE'};
                     const modeClasses = {0: 'mode-rc', 1: 'mode-follow', 2: 'mode-failsafe'};
-                    if (data.web_override || data.web_locked) {
-                        const label = data.web_action ? data.web_action.toUpperCase() : 'STANDBY (RC/FOLLOW OFF)';
-                        modeEl.textContent = 'WEB (' + label + ')';
-                        modeEl.className = 'stat-value mode-web';
-                    } else {
-                        modeEl.textContent = modeNames[data.mode] || 'UNKNOWN';
-                        modeEl.className = 'stat-value ' + (modeClasses[data.mode] || '');
-                    }
+                    modeEl.textContent = modeNames[data.mode] || 'UNKNOWN';
+                    modeEl.className = 'stat-value ' + (modeClasses[data.mode] || '');
 
                     // Speed & Steer
                     document.getElementById('speedValue').textContent = data.speed;
@@ -875,83 +637,12 @@ class WebMonitor:
         @self.app.route('/api/follow_speed', methods=['POST'])
         def api_follow_speed():
             data = request.get_json(silent=True) or {}
-            rpm = int(data.get('rpm', 20))
+            rpm = int(data.get('rpm', 5))
             set_rpm, set_pwm = self.rover.follower.set_follow_rpm(rpm)
             return jsonify({
                 'ok': True,
                 'follow_rpm': set_rpm,
                 'follow_pwm': set_pwm
-            })
-
-        @self.app.route('/api/web_lock', methods=['POST'])
-        def api_web_lock():
-            data = request.get_json(silent=True) or {}
-            locked = bool(data.get('locked', False))
-            self.web_mode_locked = locked
-            self.web_override_until = 0.0
-            self.web_action = None
-            self.web_left_speed = 0
-            self.web_right_speed = 0
-            self.current_speed = 0
-            self.current_steer = 0
-            self.rover.serial.send_web_lock(locked)
-            if locked:
-                logger.info("🔒 Web Mode LOCKED — RC and Follow modes completely shut off")
-            else:
-                logger.info("🔓 Web Mode UNLOCKED — Returned control to RC / Follow mode")
-            return jsonify({
-                'ok': True,
-                'web_locked': self.web_mode_locked
-            })
-
-        @self.app.route('/api/web_control', methods=['POST'])
-        def api_web_control():
-            data = request.get_json(silent=True) or {}
-            action = data.get('action', 'stop')
-            speed_pct = max(0, min(100, int(data.get('speed_pct', 60))))
-            pwm = int(round((speed_pct / 100.0) * 200))
-
-            if action == 'forward':
-                left_spd, right_spd = pwm, pwm
-            elif action == 'reverse':
-                left_spd, right_spd = -pwm, -pwm
-            elif action == 'rotate_right':
-                # 360 Rotate Right: Left motors forward (+), Right motors backward (-)
-                left_spd, right_spd = pwm, -pwm
-            elif action == 'rotate_left':
-                # 360 Rotate Left: Right motors forward (+), Left motors backward (-)
-                left_spd, right_spd = -pwm, pwm
-            else:
-                left_spd, right_spd = 0, 0
-                action = 'stop'
-
-            if action == 'stop' or pwm == 0:
-                self.web_override_until = 0.0
-                self.web_action = None
-                self.web_left_speed = 0
-                self.web_right_speed = 0
-                self.current_speed = 0
-                self.current_steer = 0
-                self.rover.serial.send_web_drive(0, 0)
-            else:
-                # Auto-enable Web Mode lock when driving from Web so RC/Follow never mix
-                if not self.web_mode_locked:
-                    self.web_mode_locked = True
-                    self.rover.serial.send_web_lock(True)
-                    logger.info("🔒 Web Mode auto-locked on movement — RC & Follow shut off")
-                self.web_override_until = time.time() + 1.5
-                self.web_action = action
-                self.web_left_speed = left_spd
-                self.web_right_speed = right_spd
-                self.current_speed = pwm if action != 'reverse' else -pwm
-                self.rover.serial.send_web_drive(left_spd, right_spd)
-
-            return jsonify({
-                'ok': True,
-                'action': action,
-                'web_locked': self.web_mode_locked,
-                'left_speed': left_spd,
-                'right_speed': right_spd
             })
 
         @self.app.route('/api/status')
@@ -977,9 +668,6 @@ class WebMonitor:
 
             return jsonify({
                 'mode': self.rover.serial.get_mode(),
-                'web_locked': self.web_mode_locked,
-                'web_override': self.is_web_override_active(),
-                'web_action': self.web_action if self.is_web_override_active() else None,
                 'speed': self.current_speed,
                 'steer': self.current_steer,
                 'follow_rpm': follow_rpm,

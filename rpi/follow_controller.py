@@ -1,10 +1,10 @@
 """
-Follow Controller with Constant Maintained Speed (Default 20 RPM).
+Follow Controller with Constant Maintained Speed (Default 5 RPM).
 
 Takes person detection data (bounding box position and size) and
 outputs motor commands (speed + steering) to follow the person safely:
   - Steering: PID keeps the person centered horizontally in the frame.
-  - Speed:    Maintains a CONSTANT speed (20 RPM by default, customizable from Web UI
+  - Speed:    Maintains a CONSTANT speed (5 RPM by default, customizable from Web UI
               for Follow Mode only) whenever the person is further than the target
               stopping distance, and stops immediately when at/closer than target distance.
 """
@@ -22,7 +22,7 @@ from config import (
     STEER_DEADZONE_PX, AREA_DEADZONE_RATIO,
     MOTOR_MAX_RPM, DEFAULT_FOLLOW_RPM, MIN_FOLLOW_RPM, MAX_FOLLOW_RPM,
     MAX_SPEED, MAX_STEER,
-    SPEED_RAMP_RATE, STEER_RAMP_RATE,
+    STEER_RAMP_RATE,
     LOST_TARGET_TIMEOUT, CAMERA_WIDTH
 )
 
@@ -85,7 +85,7 @@ class FollowController:
     Converts person detection results into safe, constant-speed rover motor commands.
 
       1. Steering PID: keeps person centered (horizontal error -> steering angle)
-      2. Constant Follow Speed: drives at fixed RPM (20 RPM default, adjustable on Web UI
+      2. Constant Follow Speed: drives at fixed RPM (5 RPM default, adjustable on Web UI
          for Follow Mode only) without speeding up as distance increases.
     """
 
@@ -95,12 +95,12 @@ class FollowController:
             -MAX_STEER, MAX_STEER
         )
 
-        # Follow Mode Constant Speed State (Default: 20 RPM)
+        # Follow Mode Constant Speed State (Default: 5 RPM)
         self._speed_lock = threading.Lock()
         self._follow_rpm = int(DEFAULT_FOLLOW_RPM)
         self._follow_pwm = self._rpm_to_pwm(self._follow_rpm)
 
-        # Smoothed outputs (for ramp limiting)
+        # Smoothed outputs
         self._current_speed = 0.0
         self._current_steer = 0.0
 
@@ -111,10 +111,13 @@ class FollowController:
 
     @staticmethod
     def _rpm_to_pwm(rpm):
-        """Convert desired wheel RPM into 8-bit motor driver PWM (0-255)."""
+        """
+        Convert desired wheel RPM (1..60 RPM) into 8-bit motor driver PWM (0-255).
+        Includes a small 22 PWM static-friction offset so 5 RPM (~38 PWM) rolls gently.
+        """
         if rpm <= 0:
             return 0
-        pwm = int(round((float(rpm) / float(MOTOR_MAX_RPM)) * 255.0))
+        pwm = int(round(22.0 + (float(rpm) / float(MOTOR_MAX_RPM)) * 233.0))
         return max(0, min(int(MAX_SPEED), pwm))
 
     def set_follow_rpm(self, rpm):
@@ -150,7 +153,6 @@ class FollowController:
                 self._target_acquired = False
             self._too_close_active = False
 
-            # Stop drive motors promptly when target leaves view
             self._current_speed = 0.0
             self._current_steer = self._ramp(self._current_steer, 0, STEER_RAMP_RATE)
 
@@ -200,7 +202,7 @@ class FollowController:
                 self._too_close_active = False
 
         # =====================================================================
-        # Constant Maintained Follow Speed (Default 20 RPM — never increases!)
+        # Constant Maintained Follow Speed (Default 5 RPM — never increases!)
         # =====================================================================
         area_error = TARGET_AREA_RATIO - current_area
 

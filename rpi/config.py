@@ -19,8 +19,8 @@ STATUS_START    = 0xBB
 CMD_DRIVE       = 0x01
 CMD_STOP        = 0x02
 CMD_QUERY       = 0x03
-CMD_WEB_DRIVE   = 0x04   # Direct Left/Right tank motor override from Web UI
-CMD_WEB_LOCK    = 0x05   # Dedicated Web Mode Lock (1=Shut off RC & Follow, 0=Release)
+CMD_WEB_DRIVE   = 0x04
+CMD_WEB_LOCK    = 0x05
 
 # Packet sizes
 CMD_PACKET_SIZE     = 8   # RPi -> Arduino
@@ -42,7 +42,7 @@ CAMERA_HEIGHT   = 480
 CAMERA_FPS      = 30
 
 # ==============================================================================
-# Follow-Me Controller (Constant Maintained Speed — Default 20 RPM)
+# Follow-Me Controller (Constant Maintained Speed — Default 5 RPM)
 # ==============================================================================
 
 # Frame center reference (derived from actual camera resolution)
@@ -64,19 +64,19 @@ KD_STEER = 0.15
 STEER_DEADZONE_PX   = 25     # pixels from center X (for 640px width)
 AREA_DEADZONE_RATIO = 0.012  # area ratio tolerance
 
-# Constant Follow Mode Speed (24V 250W Yalu Geared Motor: ~75 RPM rated at 255 PWM)
-MOTOR_MAX_RPM           = 75     # Rated max wheel RPM at 100% duty (255 PWM)
-DEFAULT_FOLLOW_RPM      = 20     # Default constant Follow Mode speed = 20 RPM (~68 PWM)
-MIN_FOLLOW_RPM          = 5      # Minimum selectable Follow Mode RPM on Web UI
+# Constant Follow Mode Speed (Default 5 RPM crawl speed)
+MOTOR_MAX_RPM           = 75     # Rated max wheel RPM reference
+DEFAULT_FOLLOW_RPM      = 5      # Default constant Follow Mode speed = 5 RPM
+MIN_FOLLOW_RPM          = 1      # Minimum selectable Follow Mode RPM on Web UI
 MAX_FOLLOW_RPM          = 60     # Maximum selectable Follow Mode RPM on Web UI
 
 # Legacy / safety limits
-MIN_FOLLOW_SPEED    = 60
+MIN_FOLLOW_SPEED    = 25
 MAX_SPEED           = 204    # Absolute hard ceiling (60 RPM)
 MAX_STEER           = 100    # Max steering angle (-100 to 100)
 
 # Smoothing: max change per cycle
-SPEED_RAMP_RATE     = 15     # smooth ramp up to the constant 20 RPM target
+SPEED_RAMP_RATE     = 15
 STEER_RAMP_RATE     = 35     # responsive steering for linear actuators
 
 # ==============================================================================

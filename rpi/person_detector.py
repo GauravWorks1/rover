@@ -1,11 +1,10 @@
 """
-Hybrid 3-Thread Vision System for Raspberry Pi 4 (100% Offline, Zero Lag):
-  - Thread 1: Zero-Latency MJPG Camera Frame Grabber (30 FPS)
-  - Thread 2: Fast Frontal-Face Detection + 30 FPS Tracker (MOSSE / Template fallback)
-              + Shirt-Color Owner Verification + Smoothed Position & Distance Area
+Hybrid 3-Thread Vision System for Raspberry Pi 4 (100% Offline, Sunlight-Hardened):
+  - Thread 1: Zero-Latency MJPG Camera Frame Grabber (30 FPS) with Backlight/Auto-WB
+  - Thread 2: CLAHE Sunlight-Normalized Frontal-Face Detection + 30 FPS Tracker
+              + Sunlight-Adaptive Shirt-Color Owner Lock + Smoothed Position & Area
   - Thread 3: On-Demand Back / Full-Body Detector (Haar Upper-Body + Fast HOG)
-              Only activates when frontal face is not visible (e.g. walking away with back turned),
-              keeping RPi 4 CPU cool and 30 FPS video completely lag-free!
+              with CLAHE contrast normalization for harsh outdoor sunlight & shadows.
 """
 
 import cv2
@@ -23,12 +22,17 @@ logger = logging.getLogger(__name__)
 class _FastTemplateTracker:
     """
     Ultra-fast local template tracker fallback (takes < 1.5ms per frame on RPi 4).
-    Guarantees 30 FPS tracking even on OpenCV builds without opencv-contrib MOSSE.
+    Uses CLAHE-normalized grayscale patches so outdoor sunlight glare does not break tracking.
     """
 
-    def __init__(self):
+    def __init__(self, clahe):
         self.template = None
         self.box = None
+        self.clahe = clahe
+
+    def _norm_gray(self, bgr_patch):
+        gray = cv2.cvtColor(bgr_patch, cv2.COLOR_BGR2GRAY)
+        return self.clahe.apply(gray) if self.clahe is not None else gray
 
     def init(self, frame, box):
         h, w = frame.shape[:2]
@@ -38,7 +42,7 @@ class _FastTemplateTracker:
         bw = max(10, min(w - x, bw))
         bh = max(10, min(h - y, bh))
         self.box = (x, y, bw, bh)
-        gray = cv2.cvtColor(frame[y:y + bh, x:x + bw], cv2.COLOR_BGR2GRAY)
+        gray = self._norm_gray(frame[y:y + bh, x:x + bw])
         self.template = cv2.resize(gray, (max(12, bw // 2), max(12, bh // 2)), interpolation=cv2.INTER_AREA)
         return True
 
@@ -50,7 +54,6 @@ class _FastTemplateTracker:
         x, y, bw, bh = self.box
         th, tw = self.template.shape[:2]
 
-        # Search within a local window around previous position
         margin_x = max(40, int(bw * 0.6))
         margin_y = max(35, int(bh * 0.5))
         sx1 = max(0, x - margin_x)
@@ -62,7 +65,7 @@ class _FastTemplateTracker:
         if roi.shape[0] <= bh or roi.shape[1] <= bw:
             return False, self.box
 
-        roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        roi_gray = self._norm_gray(roi)
         small_roi = cv2.resize(
             roi_gray,
             (max(tw + 2, roi.shape[1] // 2), max(th + 2, roi.shape[0] // 2)),
@@ -72,7 +75,7 @@ class _FastTemplateTracker:
         res = cv2.matchTemplate(small_roi, self.template, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
 
-        if max_val < 0.42:
+        if max_val < 0.40:
             return False, self.box
 
         nx = sx1 + max_loc[0] * 2
@@ -81,10 +84,10 @@ class _FastTemplateTracker:
         ny = max(0, min(h - bh, ny))
         self.box = (nx, ny, bw, bh)
 
-        # Gently adapt template (10% blend) to handle slow posture changes
-        new_patch = cv2.cvtColor(frame[ny:ny + bh, nx:nx + bw], cv2.COLOR_BGR2GRAY)
+        # Gently adapt template (12% blend) to handle outdoor sunlight/shadow transitions
+        new_patch = self._norm_gray(frame[ny:ny + bh, nx:nx + bw])
         new_small = cv2.resize(new_patch, (tw, th), interpolation=cv2.INTER_AREA)
-        self.template = cv2.addWeighted(self.template, 0.90, new_small, 0.10, 0)
+        self.template = cv2.addWeighted(self.template, 0.88, new_small, 0.12, 0)
 
         return True, self.box
 
@@ -96,6 +99,11 @@ class PersonDetector:
         self.upperbody_cascade = None
         self.hog = None
         self.tracker = None
+
+        # CLAHE (Contrast Limited Adaptive Histogram Equalization) for outdoor sunlight & shadow recovery
+        # Separate instances per thread for 100% thread safety
+        self._clahe_main = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
+        self._clahe_bg = cv2.createCLAHE(clipLimit=2.2, tileGridSize=(8, 8))
 
         self._running = False
         self._capture_thread = None
@@ -122,31 +130,31 @@ class PersonDetector:
         # Tracking state
         self.is_tracking = False
         self.frames_since_detect = 0
-        self.MAX_TRACK_FRAMES = 30      # Re-anchor every ~1.0s so tracker never drifts
+        self.MAX_TRACK_FRAMES = 25      # Re-anchor every ~0.85s so outdoor lighting never drifts tracker
         self._last_detect_label = "TRACKING"
         self._last_face_time = 0.0
         self._face_streak = 0           # Consecutive face detections before auto-locking shirt
 
-        # Smooth position & area filters (prevents steering & speed PID jitter)
+        # Smooth position & area filters (prevents steering & speed jitter)
         self._smooth_cx = None
         self._smooth_cy = None
         self._smooth_area = None
 
         # =====================================================================
-        # Shirt-Color "Owner Lock" State
+        # Shirt-Color "Owner Lock" State (Sunlight-Adaptive)
         # =====================================================================
         self._owner_lock = threading.Lock()
         self.owner_color_enabled = True
         self.owner_hist = None          # 2D Hue-Saturation histogram of locked owner's torso
         self.owner_rgb = None           # (R, G, B) dominant shirt color for UI display
         self.owner_match_score = 0.0    # 0.0 to 1.0 similarity
-        self.OWNER_MIN_MATCH = 0.30     # Minimum color correlation to accept back-view / multi-person match
+        self.OWNER_MIN_MATCH = 0.25     # Tolerant threshold for harsh outdoor sunlight/shade shifts
 
         # Limit OpenCV internal threads to 2 so Python threads + serial loop never starve
         cv2.setNumThreads(2)
 
     def _create_tracker(self):
-        """Use OpenCV MOSSE tracker if available, or fast built-in template tracker."""
+        """Use OpenCV MOSSE tracker if available, or fast CLAHE template tracker."""
         for creator in (
             lambda: cv2.TrackerMOSSE_create(),
             lambda: cv2.legacy.TrackerMOSSE_create(),
@@ -159,10 +167,10 @@ class PersonDetector:
                     return t
             except Exception:
                 continue
-        return _FastTemplateTracker()
+        return _FastTemplateTracker(self._clahe_main)
 
     def start(self):
-        logger.info("Loading 3-Thread Hybrid Detect+Track + OwnerLock System...")
+        logger.info("Loading 3-Thread Sunlight-Hardened Detect+Track + OwnerLock System...")
 
         # 1. Load Frontal Face Cascade (primary fast detector)
         face_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
@@ -199,6 +207,13 @@ class PersonDetector:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
 
+        # Hardware sunlight / backlight compensation hints (supported on most USB UVC webcams)
+        try:
+            self.cap.set(cv2.CAP_PROP_AUTO_WB, 1)
+            self.cap.set(cv2.CAP_PROP_BACKLIGHT, 1)
+        except Exception:
+            pass
+
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
 
@@ -216,7 +231,7 @@ class PersonDetector:
         self._thread = threading.Thread(target=self._detect_loop, daemon=True)
         self._thread.start()
 
-        logger.info("3-Thread Vision System started (Front/Back Body + Owner Color Lock)")
+        logger.info("3-Thread Vision System started (CLAHE Sunlight Compensation + Front/Back Body + Owner Lock)")
 
     def stop(self):
         self._running = False
@@ -227,13 +242,14 @@ class PersonDetector:
             self.cap.release()
 
     # =========================================================================
-    # Shirt-Color "Owner Lock" Helpers
+    # Sunlight-Resistant Shirt-Color "Owner Lock" Helpers
     # =========================================================================
 
     def _extract_torso_hist(self, frame, box):
         """
         Extract 2D Hue-Saturation histogram and dominant RGB color from the torso
-        region of a person upper-body bounding box. Takes < 0.3ms!
+        region of a person upper-body bounding box.
+        Normalizes brightness and masks out direct sun glare so outdoor lighting doesn't break matching.
         """
         h, w = frame.shape[:2]
         x, y, bw, bh = [int(v) for v in box]
@@ -250,8 +266,8 @@ class PersonDetector:
         torso = frame[ty1:ty2, tx1:tx2]
         hsv = cv2.cvtColor(torso, cv2.COLOR_BGR2HSV)
 
-        # Mask out extreme dark/glare pixels, keep both colored and neutral shirts
-        mask = cv2.inRange(hsv, np.array([0, 15, 25]), np.array([180, 255, 245]))
+        # Mask out blown-out specular sun glare (V > 250) and pitch-black shadow (V < 18)
+        mask = cv2.inRange(hsv, np.array([0, 12, 18]), np.array([180, 255, 250]))
         if cv2.countNonZero(mask) < 20:
             mask = None
 
@@ -328,20 +344,19 @@ class PersonDetector:
                 self._raw_frame_id += 1
 
     # =========================================================================
-    # THREAD 3: On-Demand Back / Full-Body Detector (Upper-Body + Fast HOG)
+    # THREAD 3: On-Demand Back / Full-Body Detector (CLAHE Sunlight Normalized)
     # =========================================================================
 
     def _background_detect_loop(self):
         """
         Runs in background ONLY when frontal face has not been seen recently (<0.45s),
         such as when the owner turns their back to walk away.
-        Normalizes all bounding boxes to the exact same upper-body scale as Frontal Face
-        so FollowController distance/speed PID works identically from Front or Back!
+        Applies CLAHE local contrast equalization so harsh outdoor sunlight & shadows
+        do not hide the person's silhouette!
         """
         last_bg_frame_id = -1
 
         while self._running:
-            # If Frontal Face is actively locked in Thread 2, sleep lightly and save 100% CPU
             if time.time() - self._last_face_time < 0.45 and self.is_tracking:
                 time.sleep(0.12)
                 continue
@@ -360,8 +375,10 @@ class PersonDetector:
             h, w = frame.shape[:2]
             small = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_LINEAR)
             small_gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+            # CLAHE neutralizes harsh outdoor sunlight glare and deep shadows
+            small_gray = self._clahe_bg.apply(small_gray)
 
-            candidates = []  # list of (tx, ty, tw, th, label) normalized to upper-body scale
+            candidates = []
 
             # --- Stage B: Haar Upper-Body (Head + Shoulders from BACK or FRONT) ---
             if self.upperbody_cascade is not None:
@@ -388,13 +405,11 @@ class PersonDetector:
                 scale_y = float(h) / float(hog_h)
 
                 for i, (rx, ry, rw, rh) in enumerate(rects):
-                    if weights[i] >= 0.45:
+                    if weights[i] >= 0.42:
                         fx = int(rx * scale_x)
                         fy = int(ry * scale_y)
                         fw = int(rw * scale_x)
                         fh = int(rh * scale_y)
-                        # Crop full-body HOG box to the upper-body/torso core so area_ratio
-                        # matches TARGET_AREA_RATIO (0.17) and TOO_CLOSE_STOP_RATIO (0.25)!
                         tx = max(0, fx + int(fw * 0.22))
                         ty = max(0, fy + int(fh * 0.12))
                         tw = min(w - tx, int(fw * 0.56))
@@ -478,11 +493,14 @@ class PersonDetector:
     def _detect_frontal_face_torso(self, frame):
         """
         Fast synchronous half-resolution (320x240) Haar Frontal Face detector (~6ms).
-        Expands detected face into an upper-body torso box and scores with Owner Shirt Lock.
+        Uses CLAHE local contrast equalization so faces in bright sunlight or backlight shadow
+        are detected reliably.
         """
         h, w = frame.shape[:2]
         small_gray = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_LINEAR)
         small_gray = cv2.cvtColor(small_gray, cv2.COLOR_BGR2GRAY)
+        # Apply CLAHE to recover face details in harsh outdoor sun/shade
+        small_gray = self._clahe_main.apply(small_gray)
 
         faces = self.face_cascade.detectMultiScale(
             small_gray,
@@ -516,7 +534,6 @@ class PersonDetector:
             hist, rgb = self._extract_torso_hist(frame, (tx, ty, tw, th))
             color_match = self._compare_owner_hist(hist)
 
-            # If multiple people are facing the camera and owner is locked, reject non-matching shirts
             if has_owner and num_faces > 1 and color_match < self.OWNER_MIN_MATCH:
                 continue
 
@@ -587,9 +604,7 @@ class PersonDetector:
                 self.is_tracking = False
 
         # =====================================================================
-        # STEP 2: Detect / Re-Anchor Target (when not tracking or every 30 frames)
-        #   2A. Try fast Frontal Face first (~6ms in Thread 2)
-        #   2B. If no frontal face, check Thread 3 Back/Upper-Body/Full-Body candidate
+        # STEP 2: Detect / Re-Anchor Target (when not tracking or every 25 frames)
         # =====================================================================
         if not self.is_tracking:
             cand = self._detect_frontal_face_torso(frame)
@@ -606,9 +621,9 @@ class PersonDetector:
                         self.owner_match_score = 1.0
                         cand['color_match'] = 1.0
                         logger.info(f"👕 Auto-locked Owner Shirt Color from confirmed face: RGB={self.owner_rgb}")
-                    elif self.owner_hist is not None and cand['hist'] is not None and cand['color_match'] > 0.65:
-                        # Gently adapt owner histogram (5%) to smooth indoor/outdoor lighting shifts
-                        cv2.addWeighted(self.owner_hist, 0.95, cand['hist'], 0.05, 0, self.owner_hist)
+                    elif self.owner_hist is not None and cand['hist'] is not None and cand['color_match'] > 0.58:
+                        # Adapt owner histogram (8%) to smooth shade <-> direct sunlight transitions
+                        cv2.addWeighted(self.owner_hist, 0.92, cand['hist'], 0.08, 0, self.owner_hist)
             else:
                 # No frontal face — check if Thread 3 found the person from BACK / SIDE
                 with self._bg_lock:
