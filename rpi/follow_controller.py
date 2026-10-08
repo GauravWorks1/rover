@@ -2,10 +2,10 @@
 PID-based Follow Controller.
 
 Takes person detection data (bounding box position and size) and
-outputs motor commands (speed + steering) to follow the person.
+outputs motor commands (speed + steering) to follow the person safely.
 
 Steering: keeps the person centered horizontally in the frame.
-Speed:    keeps the person at a target distance (based on bounding box area).
+Speed:    keeps the person at a safe target distance (based on smoothed bounding box area).
 """
 
 import time
@@ -66,7 +66,6 @@ class PIDController:
 
         # Integral with anti-windup
         self.integral += error * dt
-        # Clamp integral to prevent windup
         max_integral = (self.output_max - self.output_min) / (self.ki + 1e-6)
         self.integral = max(-max_integral, min(max_integral, self.integral))
         i_term = self.ki * self.integral
@@ -90,23 +89,19 @@ class PIDController:
 
 class FollowController:
     """
-    Converts person detection results into rover motor commands.
+    Converts person detection results into safe, smooth rover motor commands.
 
     Uses two PID controllers:
       1. Steering PID: keeps person centered (horizontal error -> steering angle)
-      2. Speed PID: maintains following distance (area error -> speed)
+      2. Speed PID: maintains safe following distance (area error -> gentle walking speed)
     """
 
     def __init__(self):
-        # Steering PID: error is horizontal offset in pixels
-        # Output: steering value (-MAX_STEER to +MAX_STEER)
-        # Positive error (person is right of center) -> positive steer (turn right)
         self.steer_pid = PIDController(
             KP_STEER, KI_STEER, KD_STEER,
             -MAX_STEER, MAX_STEER
         )
 
-        # Speed PID: error is (target_area_ratio - current_area_ratio)
         # Safety #2: If ALLOW_FOLLOW_REVERSE is False, minimum speed is 0 (never reverse blindly)
         min_speed = -MAX_SPEED if ALLOW_FOLLOW_REVERSE else 0
         self.speed_pid = PIDController(
@@ -137,18 +132,18 @@ class FollowController:
             steer: -100 to 100 (positive = turn right, negative = turn left)
         """
         # =====================================================================
-        # Case 1: No detection or stale detection
+        # Case 1: No detection or stale detection -> Brake quickly for safety
         # =====================================================================
         if detection is None or detection_age > LOST_TARGET_TIMEOUT:
             if self._target_acquired:
-                logger.info("Target lost — stopping")
+                logger.info("Target lost — stopping safely")
                 self._target_acquired = False
             self._too_close_active = False
 
-            # Gradually slow down to stop
-            self._current_speed = self._ramp(self._current_speed, 0, SPEED_RAMP_RATE)
+            # Brake twice as fast as acceleration so the rover stops promptly when target leaves view
+            self._current_speed = self._ramp(self._current_speed, 0, SPEED_RAMP_RATE * 2.5)
             self._current_steer = self._ramp(self._current_steer, 0, STEER_RAMP_RATE)
-            if not ALLOW_FOLLOW_REVERSE and self._current_speed < 0:
+            if not ALLOW_FOLLOW_REVERSE and self._current_speed < MIN_FOLLOW_SPEED * 0.5:
                 self._current_speed = 0.0
 
             # Reset PIDs when target is lost
@@ -169,30 +164,16 @@ class FollowController:
         current_area = detection['area_ratio']
 
         # --- Steering: horizontal centering (ALWAYS active when person is detected!) ---
-        # Offset in pixels from center (-320 to +320)
-        # Positive offset = person is to the RIGHT
         offset_px = detection['cx'] - FRAME_CENTER_X
 
-        # Apply pixel dead zone around center
         if abs(offset_px) < STEER_DEADZONE_PX:
             steer_error = 0.0
         else:
-            # Normalize to percentage [-100.0, +100.0]
             steer_error = (offset_px / (CAMERA_WIDTH / 2.0)) * 100.0
 
         steer_target = self.steer_pid.compute(steer_error)
         self._current_steer = self._ramp(self._current_steer, steer_target,
                                           STEER_RAMP_RATE)
-
-        # =====================================================================
-        # FEATURE #1: Hand-Gesture Pause (HOLD Position)
-        # When paused via raised hand gesture (or Web UI button), stop drive
-        # motors immediately in place while still steering to face the owner!
-        # =====================================================================
-        if detection.get('gesture_paused', False):
-            self.speed_pid.reset()
-            self._current_speed = 0.0
-            return 0, int(self._current_steer)
 
         # =====================================================================
         # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake on DRIVE motors)
@@ -213,18 +194,14 @@ class FollowController:
                 logger.info("✅ Person at safe distance — resuming Follow Mode drive")
                 self._too_close_active = False
 
-        # --- Speed: distance control via bounding box area ---
-        # Error = target_area_ratio - current_area_ratio
-        # Positive error = person too far away -> move forward
-        # Negative error = person closer than target -> stop (Safety #2: no reverse)
+        # --- Speed: gentle distance control via bounding box area ---
         area_error = TARGET_AREA_RATIO - current_area
 
         # Apply dead zone
         if abs(area_error) < AREA_DEADZONE_RATIO:
             area_error = 0.0
 
-        # If person is at or closer than target distance and reverse is disabled,
-        # stop immediately instead of slowly ramping down into the person
+        # If person is at or closer than target distance, stop immediately
         if not ALLOW_FOLLOW_REVERSE and area_error <= 0.0:
             self.speed_pid.reset()
             speed_target = 0.0
@@ -232,20 +209,26 @@ class FollowController:
         else:
             raw_pid_speed = self.speed_pid.compute(area_error)
 
-            # Reduce speed slightly when turning sharply (at most 25% reduction)
-            turn_factor = 1.0 - 0.25 * abs(steer_target / MAX_STEER)
+            # Reduce speed when turning sharply (up to 35% slower during full turns for safety)
+            turn_factor = 1.0 - 0.35 * abs(steer_target / MAX_STEER)
             raw_pid_speed *= turn_factor
 
-            # Map positive PID output into [MIN_FOLLOW_SPEED .. MAX_SPEED]
-            # so the 24V 250W geared motors always get enough starting torque to roll!
-            if raw_pid_speed > 1.0:
-                speed_target = max(float(MIN_FOLLOW_SPEED), min(float(MAX_SPEED), raw_pid_speed + MIN_FOLLOW_SPEED * 0.6))
+            # Map positive PID output smoothly into [MIN_FOLLOW_SPEED .. MAX_SPEED]
+            if raw_pid_speed > 2.0:
+                speed_target = max(
+                    float(MIN_FOLLOW_SPEED),
+                    min(float(MAX_SPEED), float(MIN_FOLLOW_SPEED) + raw_pid_speed * 0.55)
+                )
             else:
                 speed_target = 0.0
 
-            # Jump-start from 0 to MIN_FOLLOW_SPEED so ramp doesn't stall below motor friction threshold
+            # Start from MIN_FOLLOW_SPEED and ramp gently so there is never a sudden jerk
             if self._current_speed < MIN_FOLLOW_SPEED and speed_target >= MIN_FOLLOW_SPEED:
                 self._current_speed = float(MIN_FOLLOW_SPEED)
+            elif speed_target < self._current_speed:
+                # Decelerate twice as fast as acceleration when approaching target
+                self._current_speed = self._ramp(self._current_speed, speed_target,
+                                                  SPEED_RAMP_RATE * 2.0)
             else:
                 self._current_speed = self._ramp(self._current_speed, speed_target,
                                                   SPEED_RAMP_RATE)
@@ -263,6 +246,7 @@ class FollowController:
         self._current_speed = 0.0
         self._current_steer = 0.0
         self._target_acquired = False
+        self._too_close_active = False
         logger.info("Follow controller reset")
 
     @property

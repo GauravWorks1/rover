@@ -199,10 +199,8 @@ class RoverController:
             return
 
         if new_mode == MODE_FOLLOW:
-            # Reset PID controller and ensure Follow Mode starts unpaused
+            # Reset PID controller for fresh start
             self.follower.reset()
-            if not self.no_camera and self.detector:
-                self.detector.set_gesture_paused(False)
         elif new_mode == MODE_RC:
             # Stop any autonomous movement
             self.serial.send_stop()

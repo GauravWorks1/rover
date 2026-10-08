@@ -42,7 +42,7 @@ CAMERA_HEIGHT   = 480
 CAMERA_FPS      = 30
 
 # ==============================================================================
-# Follow-Me PID Controller
+# Follow-Me PID Controller (Tuned for Safe, Smooth Walking Speed)
 # ==============================================================================
 
 # Frame center reference (derived from actual camera resolution)
@@ -51,36 +51,35 @@ FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 240
 
 # Target: person bounding box should occupy this fraction of the frame
 # when the rover is at the ideal following distance
-# Note: Haar face box expanded to upper body is typically 4% (far) to 16% (ideal) to 28%+ (very close)
-TARGET_AREA_RATIO = 0.16    # ~16% of frame = ideal stopping distance (~1.5m away)
-TOO_CLOSE_STOP_RATIO = 0.28 # Safety #1: Instant hard brake if person exceeds 28% of frame (<0.8m)
-ALLOW_FOLLOW_REVERSE = False # Safety #2: Never auto-reverse blindly in Follow Mode
+TARGET_AREA_RATIO = 0.17      # ~17% of frame = safe stopping distance (~1.6m away)
+TOO_CLOSE_STOP_RATIO = 0.25   # Safety #1: Instant hard brake if person exceeds 25% of frame (<1.0m)
+ALLOW_FOLLOW_REVERSE = False  # Safety #2: Never auto-reverse blindly in Follow Mode
 
 # PID gains for STEERING (horizontal centering, error is -100 to +100 %)
-KP_STEER = 1.10
+KP_STEER = 1.05
 KI_STEER = 0.02
-KD_STEER = 0.12
+KD_STEER = 0.15
 
-# PID gains for SPEED (distance keeping via bounding box area)
-KP_SPEED = 1400.0      # scaled to convert area-ratio error to strong motor PWM
-KI_SPEED = 15.0
-KD_SPEED = 25.0
+# PID gains for SPEED (gentle distance keeping via bounding box area)
+KP_SPEED = 750.0       # smooth proportional response for safe walking speed
+KI_SPEED = 5.0
+KD_SPEED = 35.0        # extra damping so rover decelerates smoothly as it approaches you
 
 # Dead zones (ignore small errors to prevent jitter)
 STEER_DEADZONE_PX   = 25     # pixels from center X (for 640px width)
-AREA_DEADZONE_RATIO = 0.010  # area ratio tolerance
+AREA_DEADZONE_RATIO = 0.012  # area ratio tolerance
 
-# Output limits
-MIN_FOLLOW_SPEED    = 85     # Minimum PWM needed to overcome heavy rover static friction
-MAX_SPEED           = 180    # Max Follow PWM (0-255)
+# Output limits (Reduced for safe, controlled indoor/outdoor following)
+MIN_FOLLOW_SPEED    = 60     # Gentle minimum PWM to start rolling without jerking
+MAX_SPEED           = 110    # Safe walking speed cap (0-255 scale, ~43% max power)
 MAX_STEER           = 100    # Max steering angle (-100 to 100)
 
-# Smoothing: max change per cycle (prevents jerky movements)
-SPEED_RAMP_RATE     = 25     # max speed change per control cycle
-STEER_RAMP_RATE     = 35     # fast steering response for linear actuators
+# Smoothing: max change per cycle (prevents sudden lunges)
+SPEED_RAMP_RATE     = 12     # gentle acceleration per control cycle
+STEER_RAMP_RATE     = 35     # responsive steering for linear actuators
 
 # ==============================================================================
 # Timeouts & Safety
 # ==============================================================================
-LOST_TARGET_TIMEOUT     = 2.0     # seconds without detection -> stop
+LOST_TARGET_TIMEOUT     = 1.0     # seconds without detection -> stop quickly for safety
 CONTROL_LOOP_RATE       = 15      # Hz, main control loop target rate
