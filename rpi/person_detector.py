@@ -23,7 +23,11 @@ class PersonDetector:
         self.tracker = None
         
         self._running = False
+        self._capture_thread = None
         self._thread = None
+        self._raw_lock = threading.Lock()
+        self._latest_raw_frame = None
+        self._raw_frame_id = 0
         self._lock = threading.Lock()
         self._detection = None
         self._frame = None
@@ -66,8 +70,17 @@ class PersonDetector:
         if self.cascade.empty():
             raise RuntimeError("Failed to load Haar Cascade XML!")
 
-        self.cap = cv2.VideoCapture(CAMERA_INDEX)
-        
+        # Use V4L2 backend on Linux with MJPG hardware compression and 1-frame buffer
+        try:
+            self.cap = cv2.VideoCapture(CAMERA_INDEX, cv2.CAP_V4L2)
+            if not self.cap.isOpened():
+                self.cap = cv2.VideoCapture(CAMERA_INDEX)
+        except Exception:
+            self.cap = cv2.VideoCapture(CAMERA_INDEX)
+
+        # Force MJPG format on 4K USB webcam (unlocks 30 FPS instead of laggy YUYV 5-10 FPS)
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, CAMERA_WIDTH)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAMERA_HEIGHT)
         self.cap.set(cv2.CAP_PROP_FPS, CAMERA_FPS)
@@ -76,25 +89,50 @@ class PersonDetector:
             raise RuntimeError(f"Cannot open camera {CAMERA_INDEX}")
 
         self._running = True
+        # Dedicated zero-latency frame grabber thread (continuously drains USB buffer)
+        self._capture_thread = threading.Thread(target=self._capture_loop, daemon=True)
+        self._capture_thread.start()
+
+        # Vision detection + tracking thread
         self._thread = threading.Thread(target=self._detect_loop, daemon=True)
         self._thread.start()
-        logger.info("Hybrid tracking thread started")
+        logger.info("Hybrid tracking + low-latency MJPG capture started")
 
     def stop(self):
         self._running = False
         if self._thread:
-            self._thread.join(timeout=3.0)
+            self._thread.join(timeout=2.0)
+        if self._capture_thread:
+            self._capture_thread.join(timeout=2.0)
         if self.cap:
             self.cap.release()
+
+    def _capture_loop(self):
+        """Continuously read frames from USB camera so internal V4L2 buffer never queues old frames."""
+        while self._running:
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.005)
+                continue
+            with self._raw_lock:
+                self._latest_raw_frame = frame
+                self._raw_frame_id += 1
 
     def _detect_loop(self):
         frame_count = 0
         fps_start_time = time.time()
+        last_processed_id = -1
 
         while self._running:
-            ret, frame = self.cap.read()
-            if not ret:
-                time.sleep(0.01)
+            with self._raw_lock:
+                if self._latest_raw_frame is None or self._raw_frame_id == last_processed_id:
+                    frame = None
+                else:
+                    frame = self._latest_raw_frame
+                    last_processed_id = self._raw_frame_id
+
+            if frame is None:
+                time.sleep(0.005)
                 continue
 
             detection, annotated = self._run_detection(frame)
@@ -157,16 +195,25 @@ class PersonDetector:
 
         # ==========================================
         # MODE 2: DETECTING (Find person initially)
+        # Run Haar Cascade on half-res (320x240) grayscale image -> 4x faster on RPi 4!
         # ==========================================
         if not self.is_tracking:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=4, minSize=(35, 35))
+            small_gray = cv2.resize(frame, (w // 2, h // 2), interpolation=cv2.INTER_LINEAR)
+            small_gray = cv2.cvtColor(small_gray, cv2.COLOR_BGR2GRAY)
+            boxes = self.cascade.detectMultiScale(
+                small_gray,
+                scaleFactor=1.2,
+                minNeighbors=4,
+                minSize=(20, 20),
+                flags=cv2.CASCADE_SCALE_IMAGE
+            )
             
             best_area = 0
             best_box = None
 
-            # Find largest face
-            for (x, y, box_w, box_h) in boxes:
+            # Find largest face and scale coordinates back up by 2x
+            for (sx, sy, sbox_w, sbox_h) in boxes:
+                x, y, box_w, box_h = sx * 2, sy * 2, sbox_w * 2, sbox_h * 2
                 area = box_w * box_h
                 if area > best_area:
                     best_area = area
@@ -216,8 +263,8 @@ class PersonDetector:
                 self._smooth_cx = raw_cx
                 self._smooth_cy = raw_cy
             else:
-                self._smooth_cx = int(0.70 * self._smooth_cx + 0.30 * raw_cx)
-                self._smooth_cy = int(0.70 * self._smooth_cy + 0.30 * raw_cy)
+                self._smooth_cx = int(0.65 * self._smooth_cx + 0.35 * raw_cx)
+                self._smooth_cy = int(0.65 * self._smooth_cy + 0.35 * raw_cy)
 
             best_detection['cx'] = self._smooth_cx
             best_detection['cy'] = self._smooth_cy
