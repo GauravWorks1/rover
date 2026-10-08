@@ -584,23 +584,70 @@ void executeRCMode() {
     // Map steering to actuator command (-100 to 100)
     int16_t steerAngle = map(steeringCmd, -500, 500, -100, 100);
 
-    // Calculate individual motor speeds
+    // Calculate individual motor speeds based on throttle & steering:
+    // User requirement: When turning, outside wheels get up to +50 PWM boost,
+    // inside wheels slow down to minimum 15 PWM forward. NEVER rotate backward!
     int16_t targetFL, targetFR, targetRL, targetRR;
 
-    // Normal driving: differential steering
-    targetFL = fwdSpeed;
-    targetFR = fwdSpeed;
-    targetRL = fwdSpeed;
-    targetRR = fwdSpeed;
-
-    // Apply tank-style differential for turning while driving
-    // Positive diffMix = stick right = turn right:
-    //   Left wheels speed UP, Right wheels slow DOWN
-    int16_t diffMix = map(steeringCmd, -500, 500, -50, 50);
-    targetFL += diffMix;
-    targetFR -= diffMix;
-    targetRL += diffMix;
-    targetRR -= diffMix;
+    if (fwdSpeed > 0) {
+        // Driving Forward
+        if (steeringCmd > 0) {
+            // Turning RIGHT:
+            // Left wheels (outside) get up to +50 PWM boost
+            // Right wheels (inside) slow down but stay forward (floor at 15 PWM)
+            int16_t boost = map(steeringCmd, 0, 500, 0, 50);
+            int16_t slow  = map(steeringCmd, 0, 500, 0, 50);
+            targetFL = constrain(fwdSpeed + boost, 0, MAX_MOTOR_PWM);
+            targetRL = targetFL;
+            targetFR = max((int16_t)15, (int16_t)(fwdSpeed - slow));
+            targetRR = targetFR;
+        } else if (steeringCmd < 0) {
+            // Turning LEFT:
+            // Right wheels (outside) get up to +50 PWM boost
+            // Left wheels (inside) slow down but stay forward (floor at 15 PWM)
+            int16_t boost = map(-steeringCmd, 0, 500, 0, 50);
+            int16_t slow  = map(-steeringCmd, 0, 500, 0, 50);
+            targetFR = constrain(fwdSpeed + boost, 0, MAX_MOTOR_PWM);
+            targetRR = targetFR;
+            targetFL = max((int16_t)15, (int16_t)(fwdSpeed - slow));
+            targetRL = targetFL;
+        } else {
+            // Straight forward
+            targetFL = fwdSpeed;
+            targetFR = fwdSpeed;
+            targetRL = fwdSpeed;
+            targetRR = fwdSpeed;
+        }
+    } else if (fwdSpeed < 0) {
+        // Driving in Reverse (clamp so inside wheels don't spin forward)
+        int16_t revSpeed = abs(fwdSpeed);
+        if (steeringCmd > 0) {
+            int16_t boost = map(steeringCmd, 0, 500, 0, 50);
+            int16_t slow  = map(steeringCmd, 0, 500, 0, 50);
+            targetFL = -constrain(revSpeed + boost, 0, MAX_MOTOR_PWM);
+            targetRL = targetFL;
+            targetFR = -max((int16_t)15, (int16_t)(revSpeed - slow));
+            targetRR = targetFR;
+        } else if (steeringCmd < 0) {
+            int16_t boost = map(-steeringCmd, 0, 500, 0, 50);
+            int16_t slow  = map(-steeringCmd, 0, 500, 0, 50);
+            targetFR = -constrain(revSpeed + boost, 0, MAX_MOTOR_PWM);
+            targetRR = targetFR;
+            targetFL = -max((int16_t)15, (int16_t)(revSpeed - slow));
+            targetRL = targetFL;
+        } else {
+            targetFL = fwdSpeed;
+            targetFR = fwdSpeed;
+            targetRL = fwdSpeed;
+            targetRR = fwdSpeed;
+        }
+    } else {
+        // Throttle is 0: Stop all drive motors (only actuators angle wheels, no in-place tank spinning)
+        targetFL = 0;
+        targetFR = 0;
+        targetRL = 0;
+        targetRR = 0;
+    }
 
     // Set steering actuators
     setSteeringAngle(steerAngle);
@@ -644,18 +691,38 @@ void executeFollowMode() {
         return;
     }
 
-    // Calculate motor speeds with differential for steering assist
-    int16_t targetFL = speed;
-    int16_t targetFR = speed;
-    int16_t targetRL = speed;
-    int16_t targetRR = speed;
+    // Calculate individual motor speeds:
+    // Outside wheels get up to +50 PWM boost, inside wheels slow down to min 15 PWM forward.
+    // NEVER rotate backward!
+    int16_t targetFL, targetFR, targetRL, targetRR;
 
-    // Add differential speed for tighter following turns
-    int16_t diffMix = map(steer, -100, 100, -40, 40);
-    targetFL = max((int16_t)0, (int16_t)(targetFL + diffMix));
-    targetFR = max((int16_t)0, (int16_t)(targetFR - diffMix));
-    targetRL = max((int16_t)0, (int16_t)(targetRL + diffMix));
-    targetRR = max((int16_t)0, (int16_t)(targetRR - diffMix));
+    if (steer > 0) {
+        // Turning RIGHT:
+        // Left wheels (outside) boost forward
+        // Right wheels (inside) slow down to floor 15 PWM forward
+        int16_t boost = map(steer, 0, 100, 0, 50);
+        int16_t slow  = map(steer, 0, 100, 0, 40);
+        targetFL = constrain(speed + boost, 0, MAX_MOTOR_PWM);
+        targetRL = targetFL;
+        targetFR = max((int16_t)15, (int16_t)(speed - slow));
+        targetRR = targetFR;
+    } else if (steer < 0) {
+        // Turning LEFT:
+        // Right wheels (outside) boost forward
+        // Left wheels (inside) slow down to floor 15 PWM forward
+        int16_t boost = map(-steer, 0, 100, 0, 50);
+        int16_t slow  = map(-steer, 0, 100, 0, 40);
+        targetFR = constrain(speed + boost, 0, MAX_MOTOR_PWM);
+        targetRR = targetFR;
+        targetFL = max((int16_t)15, (int16_t)(speed - slow));
+        targetRL = targetFL;
+    } else {
+        // Straight forward
+        targetFL = speed;
+        targetFR = speed;
+        targetRL = speed;
+        targetRR = speed;
+    }
 
     // Apply soft start and drive motors
     driveMotorsSmooth(targetFL, targetFR, targetRL, targetRR);
