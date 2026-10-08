@@ -399,14 +399,18 @@ DASHBOARD_HTML = """
             </div>
 
             <div class="card">
-                <h3>🎯 Detection</h3>
+                <h3>🎯 Detection & Smart Follow</h3>
                 <div class="stat-row">
                     <span class="stat-label">Target</span>
                     <span class="stat-value" id="targetStatus">No target</span>
                 </div>
                 <div class="stat-row">
-                    <span class="stat-label">Confidence</span>
-                    <span class="stat-value" id="confidence">—</span>
+                    <span class="stat-label">Owner Shirt Lock</span>
+                    <span class="stat-value" id="ownerLockStatus">—</span>
+                </div>
+                <div class="stat-row">
+                    <span class="stat-label">Gesture State</span>
+                    <span class="stat-value" id="gestureStatus">▶️ Following</span>
                 </div>
                 <div class="stat-row">
                     <span class="stat-label">Position</span>
@@ -415,6 +419,17 @@ DASHBOARD_HTML = """
                 <div class="stat-row">
                     <span class="stat-label">Distance</span>
                     <span class="stat-value" id="distance">—</span>
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:10px;">
+                    <button class="ctrl-btn" style="padding:8px 6px; font-size:0.75em;" onclick="sendFollowAction('lock_owner')">
+                        👕 Re-Lock Shirt
+                    </button>
+                    <button class="ctrl-btn" style="padding:8px 6px; font-size:0.75em;" onclick="sendFollowAction('reset_owner')">
+                        🔓 Reset Owner
+                    </button>
+                    <button class="ctrl-btn" id="gesturePauseBtn" style="grid-column:span 2; padding:8px 6px; font-size:0.8em;" onclick="sendFollowAction('toggle_pause')">
+                        ✋ Toggle Follow Pause / Resume
+                    </button>
                 </div>
             </div>
 
@@ -598,6 +613,16 @@ DASHBOARD_HTML = """
             handleBtnRelease();
         }
 
+        function sendFollowAction(action) {
+            fetch('/api/follow_action', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: action})
+            })
+            .then(() => updateStatus())
+            .catch(() => {});
+        }
+
         // Poll status every 500ms
         function updateStatus() {
             fetch('/api/status')
@@ -639,8 +664,6 @@ DASHBOARD_HTML = """
                     if (data.detection) {
                         document.getElementById('targetStatus').textContent = '🟢 Locked';
                         document.getElementById('targetStatus').style.color = '#00ff88';
-                        document.getElementById('confidence').textContent =
-                            (data.detection.confidence * 100).toFixed(0) + '%';
                         document.getElementById('position').textContent =
                             '(' + data.detection.cx + ', ' + data.detection.cy + ')';
                         document.getElementById('distance').textContent =
@@ -648,9 +671,28 @@ DASHBOARD_HTML = """
                     } else {
                         document.getElementById('targetStatus').textContent = '🔴 No target';
                         document.getElementById('targetStatus').style.color = '#ff4444';
-                        document.getElementById('confidence').textContent = '—';
                         document.getElementById('position').textContent = '—';
                         document.getElementById('distance').textContent = '—';
+                    }
+
+                    // Owner Shirt Lock
+                    if (data.owner_lock && data.owner_lock.locked && data.owner_lock.rgb) {
+                        const rgb = data.owner_lock.rgb;
+                        const swatch = '<span style="display:inline-block;width:12px;height:12px;border-radius:3px;border:1px solid #fff;vertical-align:middle;margin-right:5px;background:rgb(' + rgb[0] + ',' + rgb[1] + ',' + rgb[2] + ');"></span>';
+                        document.getElementById('ownerLockStatus').innerHTML =
+                            swatch + data.owner_lock.match_score + '% match';
+                    } else {
+                        document.getElementById('ownerLockStatus').textContent = '🔓 Waiting for person';
+                    }
+
+                    // Hand Gesture Pause state
+                    const gestEl = document.getElementById('gestureStatus');
+                    if (data.gesture_paused) {
+                        gestEl.textContent = '✋ PAUSED (HOLD)';
+                        gestEl.style.color = '#ffaa00';
+                    } else {
+                        gestEl.textContent = '▶️ Following';
+                        gestEl.style.color = '#00ff88';
                     }
 
                     // RC Channels
@@ -797,6 +839,19 @@ class WebMonitor:
                 mimetype='multipart/x-mixed-replace; boundary=frame'
             )
 
+        @self.app.route('/api/follow_action', methods=['POST'])
+        def api_follow_action():
+            data = request.get_json(silent=True) or {}
+            action = data.get('action', '')
+            if not self.rover.no_camera and self.rover.detector:
+                if action == 'lock_owner':
+                    self.rover.detector.lock_owner_from_current()
+                elif action == 'reset_owner':
+                    self.rover.detector.reset_owner_lock()
+                elif action == 'toggle_pause':
+                    self.rover.detector.set_gesture_paused(not self.rover.detector.gesture_paused)
+            return jsonify({'ok': True})
+
         @self.app.route('/api/web_lock', methods=['POST'])
         def api_web_lock():
             data = request.get_json(silent=True) or {}
@@ -872,9 +927,13 @@ class WebMonitor:
         def api_status():
             # Get detection info
             detection = None
+            owner_lock = None
+            gesture_paused = False
             det_age = float('inf')
             if not self.rover.no_camera and self.rover.detector.is_running():
                 det_raw, det_age = self.rover.detector.get_detection()
+                owner_lock = self.rover.detector.get_owner_status()
+                gesture_paused = self.rover.detector.gesture_paused
                 if det_raw and det_age < 2.0:
                     detection = {
                         'cx': int(det_raw['cx']),
@@ -895,6 +954,8 @@ class WebMonitor:
                 'arduino_connected': self.rover.serial.is_connected(),
                 'rc_channels': self.rover.serial.get_rc_channels(),
                 'detection': detection,
+                'owner_lock': owner_lock,
+                'gesture_paused': gesture_paused,
                 'fps': self.rover.detector.get_fps() if not self.rover.no_camera else 0,
                 'target_acquired': self.rover.follower.target_acquired
             })

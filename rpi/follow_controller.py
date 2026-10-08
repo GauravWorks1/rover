@@ -185,6 +185,16 @@ class FollowController:
                                           STEER_RAMP_RATE)
 
         # =====================================================================
+        # FEATURE #1: Hand-Gesture Pause (HOLD Position)
+        # When paused via raised hand gesture (or Web UI button), stop drive
+        # motors immediately in place while still steering to face the owner!
+        # =====================================================================
+        if detection.get('gesture_paused', False):
+            self.speed_pid.reset()
+            self._current_speed = 0.0
+            return 0, int(self._current_steer)
+
+        # =====================================================================
         # SAFETY #1: Too-Close Emergency Stop (Instant Hard Brake on DRIVE motors)
         # Keep steering actuators active (self._current_steer) so wheels still
         # track left/right even when standing close to the camera!
