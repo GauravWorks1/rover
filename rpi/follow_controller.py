@@ -19,7 +19,7 @@ from config import (
     KP_STEER, KI_STEER, KD_STEER,
     KP_SPEED, KI_SPEED, KD_SPEED,
     STEER_DEADZONE_PX, AREA_DEADZONE_RATIO,
-    MAX_SPEED, MAX_STEER,
+    MIN_FOLLOW_SPEED, MAX_SPEED, MAX_STEER,
     SPEED_RAMP_RATE, STEER_RAMP_RATE,
     LOST_TARGET_TIMEOUT, CAMERA_WIDTH
 )
@@ -162,7 +162,7 @@ class FollowController:
         # Case 2: Person detected — compute follow commands
         # =====================================================================
         if not self._target_acquired:
-            logger.info(f"Target acquired! confidence={detection['confidence']:.0%}")
+            logger.info(f"Target acquired! confidence={detection['confidence']:.0%}, area={detection['area_ratio']:.1%}")
             self._target_acquired = True
 
         self._last_detection_time = time.time()
@@ -220,14 +220,25 @@ class FollowController:
             speed_target = 0.0
             self._current_speed = 0.0
         else:
-            speed_target = self.speed_pid.compute(area_error)
-            # Reduce speed when turning sharply (safety)
-            turn_factor = 1.0 - 0.5 * abs(steer_target / MAX_STEER)
-            speed_target *= turn_factor
+            raw_pid_speed = self.speed_pid.compute(area_error)
 
-            # Apply ramp limiting for smooth forward acceleration
-            self._current_speed = self._ramp(self._current_speed, speed_target,
-                                              SPEED_RAMP_RATE)
+            # Reduce speed slightly when turning sharply (at most 25% reduction)
+            turn_factor = 1.0 - 0.25 * abs(steer_target / MAX_STEER)
+            raw_pid_speed *= turn_factor
+
+            # Map positive PID output into [MIN_FOLLOW_SPEED .. MAX_SPEED]
+            # so the 24V 250W geared motors always get enough starting torque to roll!
+            if raw_pid_speed > 1.0:
+                speed_target = max(float(MIN_FOLLOW_SPEED), min(float(MAX_SPEED), raw_pid_speed + MIN_FOLLOW_SPEED * 0.6))
+            else:
+                speed_target = 0.0
+
+            # Jump-start from 0 to MIN_FOLLOW_SPEED so ramp doesn't stall below motor friction threshold
+            if self._current_speed < MIN_FOLLOW_SPEED and speed_target >= MIN_FOLLOW_SPEED:
+                self._current_speed = float(MIN_FOLLOW_SPEED)
+            else:
+                self._current_speed = self._ramp(self._current_speed, speed_target,
+                                                  SPEED_RAMP_RATE)
 
         # Safety #2: Final hard clamp so Follow Mode never sends negative (reverse) speed
         if not ALLOW_FOLLOW_REVERSE and self._current_speed < 0:

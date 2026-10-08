@@ -34,7 +34,7 @@ class PersonDetector:
         # Tracking state
         self.is_tracking = False
         self.frames_since_detect = 0
-        self.MAX_TRACK_FRAMES = 180  # Keep tracking for ~7-8 seconds before re-anchoring
+        self.MAX_TRACK_FRAMES = 45   # Re-anchor every ~1.5s so bounding box size (distance) updates accurately!
 
         # Smooth position filters
         self._smooth_cx = None
@@ -160,7 +160,7 @@ class PersonDetector:
         # ==========================================
         if not self.is_tracking:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(50, 50))
+            boxes = self.cascade.detectMultiScale(gray, scaleFactor=1.15, minNeighbors=4, minSize=(35, 35))
             
             best_area = 0
             best_box = None

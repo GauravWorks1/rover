@@ -51,31 +51,33 @@ FRAME_CENTER_Y  = CAMERA_HEIGHT // 2   # 240
 
 # Target: person bounding box should occupy this fraction of the frame
 # when the rover is at the ideal following distance
-TARGET_AREA_RATIO = 0.12   # ~12% of frame = good following distance
-TOO_CLOSE_STOP_RATIO = 0.25 # Safety #1: Instant hard brake if person exceeds 25% of frame
+# Note: Haar face box expanded to upper body is typically 4% (far) to 16% (ideal) to 28%+ (very close)
+TARGET_AREA_RATIO = 0.16    # ~16% of frame = ideal stopping distance (~1.5m away)
+TOO_CLOSE_STOP_RATIO = 0.28 # Safety #1: Instant hard brake if person exceeds 28% of frame (<0.8m)
 ALLOW_FOLLOW_REVERSE = False # Safety #2: Never auto-reverse blindly in Follow Mode
 
 # PID gains for STEERING (horizontal centering, error is -100 to +100 %)
-KP_STEER = 0.80
-KI_STEER = 0.01
-KD_STEER = 0.10
+KP_STEER = 1.10
+KI_STEER = 0.02
+KD_STEER = 0.12
 
 # PID gains for SPEED (distance keeping via bounding box area)
-KP_SPEED = 800.0       # scaled to convert area-ratio error to speed PWM
-KI_SPEED = 5.0
-KD_SPEED = 30.0
+KP_SPEED = 1400.0      # scaled to convert area-ratio error to strong motor PWM
+KI_SPEED = 15.0
+KD_SPEED = 25.0
 
 # Dead zones (ignore small errors to prevent jitter)
-STEER_DEADZONE_PX   = 30     # pixels from center X (for 640px width)
-AREA_DEADZONE_RATIO = 0.015  # area ratio tolerance
+STEER_DEADZONE_PX   = 25     # pixels from center X (for 640px width)
+AREA_DEADZONE_RATIO = 0.010  # area ratio tolerance
 
 # Output limits
-MAX_SPEED           = 200    # max PWM value (0-255), matches Arduino MAX_MOTOR_PWM
-MAX_STEER           = 100    # max steering angle (-100 to 100)
+MIN_FOLLOW_SPEED    = 85     # Minimum PWM needed to overcome heavy rover static friction
+MAX_SPEED           = 180    # Max Follow PWM (0-255)
+MAX_STEER           = 100    # Max steering angle (-100 to 100)
 
 # Smoothing: max change per cycle (prevents jerky movements)
-SPEED_RAMP_RATE     = 20     # max speed change per control cycle
-STEER_RAMP_RATE     = 25     # fast steering response for linear actuators
+SPEED_RAMP_RATE     = 25     # max speed change per control cycle
+STEER_RAMP_RATE     = 35     # fast steering response for linear actuators
 
 # ==============================================================================
 # Timeouts & Safety
