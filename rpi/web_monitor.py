@@ -416,7 +416,16 @@ DASHBOARD_HTML = """
                     <span class="stat-label">Distance</span>
                     <span class="stat-value" id="distance">—</span>
                 </div>
-                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:10px;">
+                <div class="speed-slider-box" style="margin-top:10px; margin-bottom:10px; border-color:rgba(0, 255, 136, 0.25);">
+                    <div class="speed-header">
+                        <span class="stat-label">Follow Mode Speed (Only)</span>
+                        <span class="stat-value" id="followSpeedLabel" style="color:#00ff88;">20 RPM (68 PWM)</span>
+                    </div>
+                    <input type="range" id="followSpeedSlider" class="speed-slider"
+                           min="5" max="60" step="1" value="20"
+                           oninput="onFollowSpeedChange(this.value)">
+                </div>
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-top:6px;">
                     <button class="ctrl-btn" style="padding:8px 6px; font-size:0.75em;" onclick="sendFollowAction('lock_owner')">
                         👕 Re-Lock Shirt
                     </button>
@@ -616,6 +625,29 @@ DASHBOARD_HTML = """
             .catch(() => {});
         }
 
+        let followSpeedEditing = false;
+        function onFollowSpeedChange(val) {
+            followSpeedEditing = true;
+            const rpm = parseInt(val, 10);
+            const pwm = Math.round((rpm / 75.0) * 255);
+            document.getElementById('followSpeedLabel').textContent =
+                rpm + ' RPM (' + pwm + ' PWM)';
+            fetch('/api/follow_speed', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({rpm: rpm})
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.follow_rpm !== undefined) {
+                    document.getElementById('followSpeedLabel').textContent =
+                        data.follow_rpm + ' RPM (' + data.follow_pwm + ' PWM)';
+                }
+                setTimeout(() => { followSpeedEditing = false; }, 600);
+            })
+            .catch(() => { followSpeedEditing = false; });
+        }
+
         // Poll status every 500ms
         function updateStatus() {
             fetch('/api/status')
@@ -676,6 +708,13 @@ DASHBOARD_HTML = """
                             swatch + data.owner_lock.match_score + '% match';
                     } else {
                         document.getElementById('ownerLockStatus').textContent = '🔓 Waiting for person';
+                    }
+
+                    // Sync Follow Mode Speed slider if not actively dragging
+                    if (!followSpeedEditing && data.follow_rpm !== undefined) {
+                        document.getElementById('followSpeedSlider').value = data.follow_rpm;
+                        document.getElementById('followSpeedLabel').textContent =
+                            data.follow_rpm + ' RPM (' + data.follow_pwm + ' PWM)';
                     }
 
                     // RC Channels
@@ -833,6 +872,17 @@ class WebMonitor:
                     self.rover.detector.reset_owner_lock()
             return jsonify({'ok': True})
 
+        @self.app.route('/api/follow_speed', methods=['POST'])
+        def api_follow_speed():
+            data = request.get_json(silent=True) or {}
+            rpm = int(data.get('rpm', 20))
+            set_rpm, set_pwm = self.rover.follower.set_follow_rpm(rpm)
+            return jsonify({
+                'ok': True,
+                'follow_rpm': set_rpm,
+                'follow_pwm': set_pwm
+            })
+
         @self.app.route('/api/web_lock', methods=['POST'])
         def api_web_lock():
             data = request.get_json(silent=True) or {}
@@ -923,6 +973,8 @@ class WebMonitor:
                         'confidence': round(float(det_raw['confidence']), 3)
                     }
 
+            follow_rpm, follow_pwm = self.rover.follower.get_follow_speed_setting()
+
             return jsonify({
                 'mode': self.rover.serial.get_mode(),
                 'web_locked': self.web_mode_locked,
@@ -930,6 +982,8 @@ class WebMonitor:
                 'web_action': self.web_action if self.is_web_override_active() else None,
                 'speed': self.current_speed,
                 'steer': self.current_steer,
+                'follow_rpm': follow_rpm,
+                'follow_pwm': follow_pwm,
                 'arduino_connected': self.rover.serial.is_connected(),
                 'rc_channels': self.rover.serial.get_rc_channels(),
                 'detection': detection,

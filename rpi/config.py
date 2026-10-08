@@ -42,7 +42,7 @@ CAMERA_HEIGHT   = 480
 CAMERA_FPS      = 30
 
 # ==============================================================================
-# Follow-Me PID Controller (Tuned for Safe, Smooth Walking Speed)
+# Follow-Me Controller (Constant Maintained Speed — Default 20 RPM)
 # ==============================================================================
 
 # Frame center reference (derived from actual camera resolution)
@@ -60,22 +60,23 @@ KP_STEER = 1.05
 KI_STEER = 0.02
 KD_STEER = 0.15
 
-# PID gains for SPEED (gentle distance keeping via bounding box area)
-KP_SPEED = 750.0       # smooth proportional response for safe walking speed
-KI_SPEED = 5.0
-KD_SPEED = 35.0        # extra damping so rover decelerates smoothly as it approaches you
-
 # Dead zones (ignore small errors to prevent jitter)
 STEER_DEADZONE_PX   = 25     # pixels from center X (for 640px width)
 AREA_DEADZONE_RATIO = 0.012  # area ratio tolerance
 
-# Output limits (Reduced for safe, controlled indoor/outdoor following)
-MIN_FOLLOW_SPEED    = 60     # Gentle minimum PWM to start rolling without jerking
-MAX_SPEED           = 110    # Safe walking speed cap (0-255 scale, ~43% max power)
+# Constant Follow Mode Speed (24V 250W Yalu Geared Motor: ~75 RPM rated at 255 PWM)
+MOTOR_MAX_RPM           = 75     # Rated max wheel RPM at 100% duty (255 PWM)
+DEFAULT_FOLLOW_RPM      = 20     # Default constant Follow Mode speed = 20 RPM (~68 PWM)
+MIN_FOLLOW_RPM          = 5      # Minimum selectable Follow Mode RPM on Web UI
+MAX_FOLLOW_RPM          = 60     # Maximum selectable Follow Mode RPM on Web UI
+
+# Legacy / safety limits
+MIN_FOLLOW_SPEED    = 60
+MAX_SPEED           = 204    # Absolute hard ceiling (60 RPM)
 MAX_STEER           = 100    # Max steering angle (-100 to 100)
 
-# Smoothing: max change per cycle (prevents sudden lunges)
-SPEED_RAMP_RATE     = 12     # gentle acceleration per control cycle
+# Smoothing: max change per cycle
+SPEED_RAMP_RATE     = 15     # smooth ramp up to the constant 20 RPM target
 STEER_RAMP_RATE     = 35     # responsive steering for linear actuators
 
 # ==============================================================================
